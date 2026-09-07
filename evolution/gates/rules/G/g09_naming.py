@@ -35,7 +35,8 @@ RULES = {
 
 # 扩展点成员目录：kebab-case 小写。下划线开头的是模板/内部件，不算成员。
 MEMBER_POINTS = ("services", "workflows", "packages",
-                 "evolution/evaluators", "evolution/experiments")
+                 "evolution/evaluators", "evolution/experiments",
+                 "evolution/loops")
 KEBAB = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 # 固定名与占位，不参与形态检查

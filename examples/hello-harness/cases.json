@@ -1,0 +1,15 @@
+{
+  "_readme": "真值。评价器拿它算通过率——【判据是数据不是感觉】。",
+  "cases": [
+    {"input": "12", "expect": 12},
+    {"input": "  7 ", "expect": 7},
+    {"input": "3个", "expect": 3},
+    {"input": "5台", "expect": 5},
+    {"input": "１２", "expect": 12},
+    {"input": "三", "expect": 3},
+    {"input": "七十二", "expect": 72},
+    {"input": "两百五十", "expect": 250},
+    {"input": "十个", "expect": 10},
+    {"input": "三千", "expect": 3000}
+  ]
+}

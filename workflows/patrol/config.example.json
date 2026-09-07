@@ -32,11 +32,6 @@
       "unit": "gooday-harness-dispatcher",
       "heartbeat": "/var/lib/gooday-harness/state/dispatcher/heartbeat",
       "max_silent_min": 10
-    },
-    {
-      "unit": "gooday-harness-ocr",
-      "heartbeat": "/var/lib/gooday-harness/state/ocr/heartbeat",
-      "max_silent_min": 5
     }
   ],
   "_services": "旧 gooday-* 已于 2026-09-07 停用并 disable，巡检目标改指新架构。max_silent_min 建议=正常单轮耗时×3。",
@@ -104,5 +99,9 @@
       ]
     }
   ],
-  "_assets": "已发布内容的文件还在不在。这类丢失特别危险：页面照常列出来，点进去才 404，后台看起来一切正常。"
+  "_assets": "已发布内容的文件还在不在。这类丢失特别危险：页面照常列出来，点进去才 404，后台看起来一切正常。",
+  "evolution": {
+    "_": "进化闭环巡检。max_age_hours 按闭环的实际跑动频率设，留余量",
+    "max_age_hours": 26
+  }
 }

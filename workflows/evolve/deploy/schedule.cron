@@ -1,0 +1,5 @@
+# runas: root
+# 每天 07:30 把注册的进化闭环各跑一轮（排在 08:00 的 evaluate 之前）。
+# 闭环引擎只管怎么转，什么时候转由本 workflow 统一负责——
+# 否则每接一个闭环就要加一条 cron，迟早有人忘（policies G17）。
+30 7 * * * bash -c 'set -a; source /opt/gooday-harness/.env 2>/dev/null; set +a; python3 /opt/gooday-harness/workflows/{{NAME}}/run.py' >> /var/log/gooday-harness/{{NAME}}.log 2>&1

@@ -32,6 +32,33 @@ jobs:
       - name: trace 自测
         run: python3 packages/trace/test_trace.py
 
+      - name: botkit 自测
+        run: python3 packages/botkit/test_botkit.py
+
+      # ── 自我进化闭环：两面都要验 ──────────────────────────────
+      # 顺利时能转（hello-harness 自动收敛）＋ 出事时能停（13 项失败路径）。
+      # 只验前者最危险：那样的闭环会在出事那天把坏东西 promote 上去，
+      # 然后报告「一轮成功」。
+      - name: 闭环失败路径自测
+        run: python3 packages/evolve/test_loop.py
+
+      - name: 闭环端到端（自动收敛）
+        env:
+          GOODAY_HARNESS_STATE: ${{ runner.temp }}/harness-state
+        run: cd examples/hello-harness && python3 run.py --loop 6
+
+      - name: 闭环留痕完整性
+        env:
+          GOODAY_HARNESS_STATE: ${{ runner.temp }}/harness-state
+        # 跑完必须留下六样痕迹。少任何一样都说明「转是转了，但看不见」——
+        # 而你没法改进一件你看不见的事。
+        run: |
+          for d in tasks evidence evaluations decisions experience checkpoints; do
+            n=$(ls "$GOODAY_HARNESS_STATE/$d" 2>/dev/null | wc -l)
+            echo "  $d: $n"
+            [ "$n" -gt 0 ] || { echo "❌ $d 为空：闭环跑了却没留痕"; exit 1; }
+          done
+
       - name: 安装脚本语法
         run: bash -n ops/install.sh
 
