@@ -30,7 +30,7 @@ def check(ctx):
 
     for f in ctx.walk(".cs", ".py", ".sh", under=None):
         rel = ctx.rel(f)
-        if rel.startswith(("checks/", "norms/", "docs/")):
+        if rel.startswith(("checks/", "policies/", "docs/")):
             continue
         for i, line in enumerate(ctx.read(f).splitlines(), 1):
             m = SQL_AMOUNT.search(line)

@@ -28,7 +28,7 @@ VOICE = re.compile(r"['\"](zh-[A-Z]{2}-\w+Neural)['\"]")
 
 
 def check(ctx):
-    for f in ctx.walk(".py", under="pipelines"):
+    for f in ctx.walk(".py", under="workflows"):
         for i, line in enumerate(ctx.read(f).splitlines(), 1):
             for v in VOICE.findall(line):
                 if v in DEAD:

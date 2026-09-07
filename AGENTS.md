@@ -1,79 +1,84 @@
 # Gooday · Agent 作业入口
 
-> 本文件是**索引，不是手册**。上限 150 行（norms/H01）。
-> 细节全在 `norms/`，别往这里堆——它一膨胀，分层就失效了。
+> 本文件是**索引，不是手册**。上限 150 行（policies/H01）。
+> 细节全在 `policies/`，别往这里堆——它一膨胀，分层就失效了。
 
 ## 这是什么
 
-Gooday 是一个由 AI 员工运营的数字公司 + 内容平台。
-客户下单、方案、开发、交付、收款由六个 AI 角色完成；内容产线自动出片上架。
+一个由 AI 员工运营的数字公司 + 内容平台，**并且它会改进自己**。
+
+系统分两个循环：**执行**（把事做完）和**进化**（把事做得更好）。
+目录就是按这两个循环组织的。
 
 ## 目录结构
 
-**五个扩展点，各自带 `_template/`。新增成员 = 复制模板，不改任何现有文件。**
+```
+┌─ 第一层：执行循环 ──────────────────────────────────────────┐
+│ services/<名>/     长驻进程。README.md · main.py · deploy/  │
+│ workflows/<名>/    业务流程。README.md · run.py  · deploy/  │
+│ packages/<名>/     跨模块共用库（被 ≥2 处用到才建）          │
+└─────────────────────────────────────────────────────────────┘
+                        │ Result + Evidence
+                        ▼
+┌─ 第二层：进化循环 ──────────────────────────────────────────┐
+│ evolution/                                                  │
+│   evaluators/<名>/  给结果打分：这次做得怎么样               │
+│   experiments/<名>/ 改动怎么验证（影子 / 灰度 / 前后对比）    │
+│   gates/            质量门禁：check.py + rules/{H,C,G}/      │
+└─────────────────────────────────────────────────────────────┘
+
+policies/{H,C,G}/   规范三层：H 通用 · C 数字公司 · G 本项目
+ops/                install.sh · nginx/ · runbooks/
+docs/               specs/ 设计 · decisions/ 改动理由 · incidents/ 事故
+examples/           可分发示例    content/  创作源
+```
+
+**仓库外**（policies G01，不进 git）：
 
 ```
-services/     长驻进程：一个目录 = 一个可独立部署的服务
-              api  web  bot-灵犀  bot-如意  dispatcher  patrol …
-              └── <名>/{README.md, main.py, deploy/unit.service}
-
-pipelines/    内容产线：一个目录 = 一条产线
-              └── <名>/{README.md, run.py, deploy/schedule.cron}
-
-packages/     跨服务共用库（被 ≥2 处用到才放这儿）
-              └── <名>/{README.md, ...}
-
-norms/        规范，三层：H(通用) C(数字公司) G(本项目)
-checks/rules/ 检查器，同样三层，一条规范一个文件
-
-ops/          不属于任何单个服务的：install.sh  nginx/  runbooks/
-kits/         可分发产品   docs/{specs,incidents}/   content/  创作源
+/var/lib/gooday/  state/ tasks/ events/ evidence/ evaluations/ checkpoints/
+/var/log/gooday/  日志          /srv/gooday/  media/ 产物 · backups/ 备份
 ```
-
-**部署配置随服务走**（`services/<名>/deploy/`），不集中放 `ops/`。
-`ops/install.sh` 只做通配扫描，永远不列举成员——所以新增服务不用改它。
-
-**仓库外**（G01，不进 git）：
-`/var/lib/gooday/state/` 状态 · `/var/log/gooday/` 日志 ·
-`/srv/gooday/media/` 产物 · `/srv/gooday/backups/` 备份
 
 ## 新增一个东西
 
-```bash
-cp -r services/_template  services/<名>      # 加服务
-cp -r pipelines/_template pipelines/<名>     # 加产线
-cp -r packages/_template  packages/<名>      # 加共用库
-# 加规范：norms/<层>/ 丢 .md + checks/rules/<层>/ 丢 .py，两边同一提交
-sudo bash ops/install.sh                     # 装上，不需要改这个脚本
-```
-
-## 五条铁律
-
-违反任何一条，`checks/check.py` 会红。**先读 `norms/00-index.md` 再动手。**
-
-1. **五类分离** —— 代码、配置、规范、状态、产物各有其位。
-   **状态和产物不得出现在仓库内**（`/var/lib/gooday/`、`/srv/gooday/`）。
-2. **目录即契约** —— `apps/` `pipelines/` 下每个子目录必须有 `README.md`，
-   且含可证伪的「判据」章节。写不出判据的模块，说明你不知道它算不算成功。
-3. **单一真源** —— 同一份配置只能有一处。crontab 只在 `ops/cron/`，
-   systemd 只在 `ops/systemd/`，别在别处放副本、别手工 `.bak`。
-4. **部署可重建** —— `ops/` 下所有配置必须被 `ops/install.sh` **整目录扫描**安装。
-   新增配置不需要改安装脚本；改了安装脚本才能装上的东西，迟早会漏。
-5. **规范必须可执行** —— `norms/` 里每条标 `[可检查]` 的条目，
-   在 `checks/rules/` 必须有实现。两边脱钩，检查器自己会红。
-
-## 动手前必做
+**五个扩展点各自带 `_template/`。复制模板即可，不改任何现有文件。**
 
 ```bash
-python3 checks/check.py .        # 看基线，别在红着的地方上面加新债
+cp -r services/_template            services/<名>       # 加服务
+cp -r workflows/_template           workflows/<名>      # 加流程
+cp -r evolution/evaluators/_template  evolution/evaluators/<名>   # 加评价器
+cp -r evolution/experiments/_template evolution/experiments/<名>  # 加实验
+cp -r packages/_template            packages/<名>       # 加共用库
+# 加规范：policies/<层>/ 丢 .md ＋ evolution/gates/rules/<层>/ 丢 .py，同一提交
+sudo bash ops/install.sh            # 装上——不需要改这个脚本
 ```
 
-## 改完必做
+## 七条铁律
 
-- [ ] `python3 checks/check.py .` 不比动手前更红
-- [ ] 动了常驻服务？确认**进程启动时间晚于代码 mtime**，否则你验的是旧代码
-- [ ] 动了 cron？等一个执行周期，确认**日志文件真的出现**（`crontab -l` 不算数）
-- [ ] 提交信息里写**怎么验的**，不是"应该没问题"
+违反任一，`evolution/gates/check.py` 会红。**先读 `policies/00-index.md`。**
+
+1. **五类分离** —— 状态、日志、产物、备份不得出现在仓库内。
+2. **目录即契约** —— 每个成员必须有 `README.md` 且含**可证伪**的判据。
+3. **单一真源** —— 配置跟归属方走且只有一份；汇总产物不入库；禁手工 `.bak`。
+4. **部署可重建** —— `install.sh` 只做通配扫描，永不列举成员。
+5. **规范可执行** —— `policies/` 与 `gates/rules/` 一一对应，脱钩即红。
+6. **扩展点契约** —— 新增成员 = 复制模板，不碰现有文件。
+7. **改动可追溯** —— 任何自动改动留下 Task / Event / Evidence / Evaluation /
+   Decision / Checkpoint。**没有证据不许改。**
+
+## 动手前后
+
+```bash
+python3 evolution/gates/check.py .     # 动手前看基线，别在红着的地方加新债
+```
+
+改完必须逐项确认：
+
+- [ ] 检查器不比动手前更红
+- [ ] 动了常驻服务？**进程启动时间晚于代码 mtime**，否则你验的是旧代码
+- [ ] 动了 cron？等一个执行周期，**确认日志文件真的出现**（`crontab -l` 不算数）
+- [ ] 提交信息写**怎么验的**，不是"应该没问题"
 
 ## 三条不可协商
 
@@ -81,25 +86,20 @@ python3 checks/check.py .        # 看基线，别在红着的地方上面加新
 - **资金相关判定永不自愈** —— 对不上就停下来问人。
 - **静态检查全绿 ≠ 系统能跑** —— 上线前必须端到端真跑一次。
 
-## 规范分层
+## 通用检查外包，不造轮子
 
-| 层 | 管什么 | 在哪 |
-|---|---|---|
-| **H** | 通用 AI 作业规范 | `norms/H-*.md` |
-| **C** | AI 数字公司运营 | `norms/C-*.md` |
-| **G** | Gooday 项目专属（踩出来的） | `norms/G-*.md` |
-
-通用检查（密钥、大文件、静默吞错）外包给 gitleaks / pre-commit / Semgrep，
-`checks/` 只写**现成工具不可能知道的项目专属规则**。别造轮子。
+密钥→gitleaks / TruffleHog，静默吞错→Semgrep，大文件→pre-commit。
+`gates/rules/` **只写现成工具不可能知道的项目专属规则**。见 policies「什么该外包」。
 
 ## 长期目标
 
-本骨架将开源为通用工程模板，Gooday 本体保持私有作参考实现。
-方向已定、未启动，详见 `docs/specs/001-开源为工程骨架模板.md`。
-**这意味着：写规范时假设外人会读到它**——别把业务细节焊进条文。
+第二层循环（`evolution/`）将开源为**可挂在任何执行层之上的自我迭代层**——
+不自己实现 Runtime，不绑定框架。Gooday 是它的第一个真实用户，不是"示例"。
+方向已定、未启动，详见 `docs/specs/001-*.md`。
+**写规范时假设外人会读到**——别把业务细节焊进条文。
 
 ## 事故了怎么办
 
-1. 按 `docs/incidents/` 的模板写复盘
-2. **7 天内产出一条可检查的规范**，进 `norms/` + `checks/rules/`
+1. 按 `docs/incidents/` 模板写复盘
+2. **7 天内产出一条可检查的规范** → `policies/` ＋ `gates/rules/`
 3. 新检查器必须**在修复前的代码上会红** —— 否则它是假的

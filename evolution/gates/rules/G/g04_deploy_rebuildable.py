@@ -21,7 +21,7 @@ INSTALL = "ops/install.sh"
 # 扩展点 -> 安装脚本里必须出现的通配扫描形态（正则任一命中即算过）
 MUST_GLOB = {
     "services": [r"services/\*", r"services/\$\{?\w+\}?/deploy"],
-    "pipelines": [r"pipelines/\*", r"pipelines/\$\{?\w+\}?/deploy"],
+    "workflows": [r"workflows/\*", r"workflows/\$\{?\w+\}?/deploy"],
     "ops/nginx": [r"ops/nginx/\*"],
 }
 

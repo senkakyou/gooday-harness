@@ -8,8 +8,8 @@
 # ══ G04 铁律 ═══════════════════════════════════════════════════════════
 # 本脚本【只做通配扫描，绝不列举成员】。
 #
-# 新增一个 service 或 pipeline 时，【不需要改本脚本】。
-# 如果你发现必须改本脚本才能装上某个东西，说明结构错了——回去看 norms G06。
+# 新增一个 service 或 workflow 时，【不需要改本脚本】。
+# 如果你发现必须改本脚本才能装上某个东西，说明结构错了——回去看 policies G06。
 #
 # 换来这条的事故（2026-09-07）：claudecred.conf 已在服务器上生效，
 # 但安装脚本只写死装 memorymax.conf。重装机器时静默丢配置，
@@ -26,8 +26,9 @@ log() { printf '==> %s\n' "$*"; }
 # ── 1. 仓库外的四个位置（G01 五类分离）─────────────────────────────────
 # 状态、日志、产物、备份一律在仓库外。先建，否则服务启动即失败。
 log "创建仓库外目录"
-install -d -m 755 /var/lib/gooday/state /var/log/gooday \
-                  /srv/gooday/media /srv/gooday/backups
+# state=服务状态；tasks/events/evidence/evaluations/checkpoints=第二层循环的证据链（G07）
+install -d -m 755 /var/lib/gooday/{state,tasks,events,evidence,evaluations,checkpoints} \
+                  /var/log/gooday /srv/gooday/media /srv/gooday/backups
 
 # ── 2. services/*/deploy —— 通配扫描 ───────────────────────────────────
 log "安装服务单元"
@@ -49,17 +50,17 @@ for dir in "$REPO"/services/*/; do
     echo "    gooday-$name"
 done
 
-# ── 3. pipelines/*/deploy/schedule.cron —— 汇总成唯一 crontab ──────────
+# ── 3. workflows/*/deploy/schedule.cron —— 汇总成唯一 crontab ──────────
 # G03 单一真源：不做增量合并。增量合并会让「实际在跑的」和「仓库里的」慢慢分叉。
 log "汇总 crontab"
 CRON_TMP="$(mktemp)"
 {
-    echo "# 本文件由 ops/install.sh 从 pipelines/*/deploy/schedule.cron 自动汇总。"
+    echo "# 本文件由 ops/install.sh 从 workflows/*/deploy/schedule.cron 自动汇总。"
     echo "# 【不要手工编辑】——改动会在下次 install 时被覆盖。要改就改产线目录里那份。"
     echo "SHELL=/bin/bash"
     echo "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     echo
-    for dir in "$REPO"/pipelines/*/; do
+    for dir in "$REPO"/workflows/*/; do
         name="$(basename "$dir")"
         [[ "$name" == _* ]] && continue
         sched="$dir/deploy/schedule.cron"

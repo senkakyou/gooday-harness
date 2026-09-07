@@ -10,7 +10,7 @@
 
     正确的单一真源是【配置跟着它的归属方走，且只有那一份】：
       services/<名>/deploy/     该服务的 unit 与 drop-in
-      pipelines/<名>/deploy/    该产线的 cron 片段
+      workflows/<名>/deploy/    该产线的 cron 片段
       ops/nginx/                不属于任何单个服务的全局配置
 
 上一版真实教训：scripts/ 里同时躺着 crontab.bak、crontab.bak.20260811、
@@ -27,7 +27,7 @@ TITLE = "单一真源"
 HOMES = {
     ".service": [r"^services/[^/]+/deploy/"],
     ".conf":    [r"^services/[^/]+/deploy/", r"^ops/nginx/"],
-    ".cron":    [r"^pipelines/[^/]+/deploy/"],
+    ".cron":    [r"^workflows/[^/]+/deploy/"],
 }
 
 # 汇总产物：由 install.sh 生成，不该有人手工维护一份进版本库
@@ -46,7 +46,7 @@ def check(ctx):
         pats = HOMES.get(ext)
         if pats and not any(re.search(p, f) for p in pats):
             yield ("ERROR", f"{ext} 配置不在归属方目录：{f}",
-                   "服务配置放 services/<名>/deploy/，产线放 pipelines/<名>/deploy/，"
+                   "服务配置放 services/<名>/deploy/，产线放 workflows/<名>/deploy/，"
                    "全局放 ops/nginx/。集中存放会逼着新增成员改公共目录（见 G06）")
 
     # 2) 汇总产物不得入库——它由 install.sh 生成，入库就会和真源分叉

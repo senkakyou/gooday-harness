@@ -1,6 +1,6 @@
 # 规范总表
 
-> **本表是契约**：带 `[可检查]` 的条目，必须在 `checks/rules/` 有同编号实现；反之亦然。
+> **本表是契约**：带 `[可检查]` 的条目，必须在 `evolution/gates/rules/` 有同编号实现；反之亦然。
 > 两边脱钩时 `check_rule_coverage` 会红。
 >
 > 立场：**一条规范如果不能被自动判定真假，它就不是规范，是愿望。**
@@ -48,7 +48,7 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 |---|---|---|
 | 代码 | `services/` `pipelines/` `packages/` `checks/` | ✅ |
 | 配置 | 随服务/产线走（`*/deploy/`）+ 全局 `ops/` | ✅ |
-| 规范 | `norms/` `docs/` | ✅ |
+| 规范 | `policies/` `docs/` | ✅ |
 | **状态** | `/var/lib/gooday/state/` | ❌ 可重建 |
 | **日志** | `/var/log/gooday/` | ❌ 滚动 |
 | **产物** | `/srv/gooday/media/` | ❌ 体积大 |
@@ -105,7 +105,7 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 
 ### G05 规范必须可执行（元规范）`[可检查]`
 
-`norms/` 每条 `[可检查]` 条目在 `checks/rules/` 有实现；反向亦然。
+`policies/` 每条 `[可检查]` 条目在 `evolution/gates/rules/` 有实现；反向亦然。
 
 > 教训：提示词注入防御条款写进文档三个月，**一个 bot 的 prompt 里都没有**。
 > 没有检查器的规范，就是一份没人读的文档。
@@ -121,8 +121,8 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 | `services/` | `cp -r services/_template services/<名>` | `README.md`、`deploy/unit.service` |
 | `pipelines/` | `cp -r pipelines/_template pipelines/<名>` | `README.md`、`deploy/schedule.cron` |
 | `packages/` | `cp -r packages/_template packages/<名>` | `README.md` |
-| `norms/{H,C,G}/` | 丢一个 `.md` 进去 | 条目登记进本表 |
-| `checks/rules/{H,C,G}/` | 丢一个 `.py` 进去 | `RULE` / `TITLE` / `check(ctx)` |
+| `policies/{H,C,G}/` | 丢一个 `.md` 进去 | 条目登记进本表 |
+| `evolution/gates/rules/{H,C,G}/` | 丢一个 `.py` 进去 | `RULE` / `TITLE` / `check(ctx)` |
 
 **部署配置随服务走，不集中放**——`services/<名>/deploy/` 而不是 `ops/systemd/`。
 `ops/install.sh` 只做通配扫描，永远不列举成员。
@@ -130,6 +130,28 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 > 教训：上一版新增 drop-in 必须手工改安装脚本。结果 `claudecred.conf`
 > 在服务器上生效了、脚本没同步，重装即静默丢配置——bot「活着但答不出话」，
 > 心跳和 systemd 全绿。**根因不是忘了改，是结构要求你记得改。**
+
+### G07 改动可追溯 `[可检查]`
+
+**没有证据不许改。** 任何自动改动必须留下六样：
+
+| 留痕 | 落在哪 |
+|---|---|
+| **Task** 这次要干什么 | `/var/lib/gooday/tasks/` |
+| **Event** 过程中发生了什么 | `/var/lib/gooday/events/` |
+| **Evidence** 凭什么这么判 | `/var/lib/gooday/evidence/` |
+| **Evaluation** 打了几分、为什么 | `/var/lib/gooday/evaluations/` |
+| **Decision** 决定改什么、谁批的 | `docs/decisions/`（**进版本库**） |
+| **Checkpoint** 改之前的可回滚点 | `/var/lib/gooday/checkpoints/` |
+
+配套：每个实验必须关联一个 Decision 并写明回滚点；
+每个评价器必须说明 Evidence 来源——没有证据的评价是拍脑袋，
+用它驱动改进只会放大噪音。
+
+> 教训：2026-09-07 踩的每个坑都是「发生了但没留痕」。凭据 8/25 就失效，
+> 三周无人发现；drop-in 装上了但脚本没记，重装即丢；注入条款写了三个月
+> 没进任何 prompt。**可追溯不是审计需求，是自我迭代的前提**——
+> 你没法改进一件你看不见的事。
 
 ---
 
@@ -151,5 +173,5 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 
 1. 先想清楚**检查器怎么写**。写不出来的，要么改写成能检查的形式，要么标「人工」
    并在 `ops/runbooks/` 给它一个端到端验收动作。
-2. 规范进 `norms/`，检查器进 `checks/rules/`，同一个提交。
+2. 规范进 `policies/`，检查器进 `evolution/gates/rules/`，同一个提交。
 3. **新检查器必须在修复前的代码上会红**——在坏代码上也不报警的检查器，等于没写。

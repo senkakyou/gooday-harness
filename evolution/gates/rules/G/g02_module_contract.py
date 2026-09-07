@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""G02 目录即契约：apps/ 与 pipelines/ 下每个模块必须有 README 且含可证伪的判据。
+"""G02 目录即契约：每个扩展点的成员必须有 README 且含可证伪的判据。
 
 写不出判据的模块，说明你不知道它算不算成功——那它凭什么存在、凭什么继续占资源。
 上一版有 32 个内容产线脚本混在一个目录里，没有一个说得清「跑成什么样算成功」，
@@ -10,7 +10,8 @@ import re
 RULE = "G02"
 TITLE = "目录即契约"
 
-SCAN_UNDER = ("services", "pipelines", "packages")
+SCAN_UNDER = ("services", "workflows", "packages",
+              "evolution/evaluators", "evolution/experiments")
 CRITERIA_HEAD = re.compile(r"^#{1,4}\s*(判据|验收|通过标准|成功标准)", re.M)
 
 # 无法判定真假的措辞——出现即判不合格
@@ -21,7 +22,8 @@ VAGUE = ("更好用", "更方便", "更丰富", "提升体验", "优化体验",
 # 模板里的示例判据自带数字，不设哨兵的话照抄就能通过检查——
 # 那 G02「必须有判据」就成了摆设。（2026-09-07 实测复制模板后 0 报错才发现）
 TEMPLATE_MARKS = ("本文件是模板", "&lt;名字&gt;", "<名字>", "cp -r services/_template",
-                  "cp -r pipelines/_template", "cp -r packages/_template",
+                  "cp -r pipelines/_template", "cp -r workflows/_template",
+                  "cp -r packages/_template", "cp -r evolution/",
                   "一句话说明")
 
 
@@ -66,4 +68,4 @@ def check(ctx):
                        "判据要能被机械判定，通常意味着有阈值和时间窗")
 
     if not seen:
-        yield ("SKIP", "services/ pipelines/ packages/ 下暂无成员", "")
+        yield ("SKIP", "services/ workflows/ packages/ evolution/ 下暂无成员", "")

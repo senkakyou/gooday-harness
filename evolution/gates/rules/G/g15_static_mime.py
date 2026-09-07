@@ -46,7 +46,7 @@ def check(ctx):
     seen = {}
     for f in ctx.walk(".cs", ".py", ".jsx", ".tsx", under=None):
         rel = ctx.rel(f)
-        if rel.startswith(("checks/", "norms/", "docs/")):
+        if rel.startswith(("checks/", "policies/", "docs/")):
             continue
         body = ctx.read(f)
         if "upload" not in body.lower() and "wwwroot" not in body:

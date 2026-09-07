@@ -2,19 +2,19 @@
 # -*- coding: utf-8 -*-
 """Gooday 规范检查器 —— 单一入口。
 
-设计立场（改之前先读 norms/00-index.md）：
+设计立场（改之前先读 policies/00-index.md）：
     **一条规范如果不能被自动判定真假，它就不是规范，是愿望。**
 
 结构：一条规范 = 一个 rules/*.py 文件，导出 RULE / TITLE / check(ctx)。
-这样 norms/ 的条目和 checks/rules/ 的文件能一一对上，G05 才检查得动。
+这样 policies/ 的条目和 evolution/gates/rules/ 的文件能一一对上，G05 才检查得动。
 
 【本文件只写现成工具不可能知道的规则】——密钥交给 gitleaks，
 静默吞错交给 Semgrep，大文件交给 pre-commit。别在这里造轮子，
-理由见 norms/00-index.md「什么该外包」。
+理由见 policies/00-index.md「什么该外包」。
 
 用法：
-    python3 checks/check.py [仓库根]
-    python3 checks/check.py . --json
+    python3 evolution/gates/check.py [仓库根]
+    python3 evolution/gates/check.py . --json
 退出码：0 = 无 ERROR；1 = 有 ERROR
 """
 import importlib.util
@@ -26,8 +26,26 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RULES_DIR = os.path.join(HERE, "rules")
+
+
+def _find_root(start):
+    """向上找 AGENTS.md 认仓库根。
+
+    别用 dirname(dirname(...)) 数层数——本文件从 evolution/gates/ 移到 evolution/gates/ 时
+    层数就变了，写死层数的代码会静默算错根目录，然后所有规则都扫了个空。
+    """
+    d = start
+    while True:
+        if os.path.exists(os.path.join(d, "AGENTS.md")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return start
+        d = parent
+
+
 ROOT = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 and not sys.argv[1].startswith("-") \
-    else os.path.dirname(HERE)
+    else _find_root(HERE)
 AS_JSON = "--json" in sys.argv
 
 
@@ -93,7 +111,7 @@ class Ctx:
 def load_rules():
     """递归加载 rules/**/*.py。
 
-    目录分层（rules/H、rules/C、rules/G）对应 norms/ 的三层，
+    目录分层（rules/H、rules/C、rules/G）对应 policies/ 的三层，
     但加载不关心在哪一层——【新增一条规范 = 丢一个文件进去，不改本文件】。
     这是 G06 扩展点契约对检查器自己的要求。
     """
@@ -124,14 +142,14 @@ def load_rules():
 
 
 def check_rule_coverage(ctx, implemented):
-    """G05 元规范：norms/ 的 [可检查] 条目 与 checks/rules/ 必须一一对应。
+    """G05 元规范：policies/ 的 [可检查] 条目 与 evolution/gates/rules/ 必须一一对应。
 
     这条是整套东西的保险丝——它红了说明规范和执行体已经脱钩，
-    而脱钩的规范就是三个月没人发现没生效的那种（见 norms G05 的教训）。
+    而脱钩的规范就是三个月没人发现没生效的那种（见 policies G05 的教训）。
     """
-    doc = ctx.read("norms/00-index.md")
+    doc = ctx.read("policies/00-index.md")
     if not doc:
-        return [("ERROR", "norms/00-index.md 不存在", "规范总表是契约，不能没有")]
+        return [("ERROR", "policies/00-index.md 不存在", "规范总表是契约，不能没有")]
 
     documented = set()
     for line in doc.splitlines():
@@ -145,11 +163,11 @@ def check_rule_coverage(ctx, implemented):
     extra = sorted(implemented - documented)
     out = []
     if missing:
-        out.append(("ERROR", f"规范标了 [可检查] 但 checks/rules/ 没实现：{', '.join(missing)}",
+        out.append(("ERROR", f"规范标了 [可检查] 但 evolution/gates/rules/ 没实现：{', '.join(missing)}",
                     "要么实现，要么把该条改成「人工」并在 ops/runbooks/ 给它验收动作"))
     if extra:
         out.append(("ERROR", f"实现了检查器但规范总表没登记：{', '.join(extra)}",
-                    "补进 norms/00-index.md"))
+                    "补进 policies/00-index.md"))
     return out
 
 
@@ -194,7 +212,7 @@ def main():
         print(f"规则 {len(implemented)} 条 · 错误 {e} · 警告 {w}")
         if e:
             print("\n有 ERROR，CI 应当红。每一条都对应一次真实事故——"
-                  "别改检查器，先看 norms/ 里那条规范下面的教训。")
+                  "别改检查器，先看 policies/ 里那条规范下面的教训。")
 
     sys.exit(1 if any(r[0] == "ERROR" for r in results) else 0)
 

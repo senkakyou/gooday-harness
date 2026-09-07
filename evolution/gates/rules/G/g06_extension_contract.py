@@ -19,9 +19,12 @@ TITLE = "扩展点契约"
 
 # 扩展点 -> 每个成员必须有的东西
 POINTS = {
-    "services":  ["README.md", "deploy/unit.service"],
-    "pipelines": ["README.md", "deploy/schedule.cron"],
-    "packages":  ["README.md"],
+    "services":                ["README.md", "deploy/unit.service"],
+    "workflows":               ["README.md", "deploy/schedule.cron"],
+    "packages":                ["README.md"],
+    # 第二层循环的两个扩展点：评价器与实验
+    "evolution/evaluators":    ["README.md"],
+    "evolution/experiments":   ["README.md"],
 }
 
 
@@ -53,8 +56,9 @@ def check(ctx):
 
     # 3) 反向：部署配置不得散落在扩展点之外
     #    服务的 unit 必须待在自己服务目录里，不能回到全局 ops/
-    for stray in ("ops/systemd", "ops/cron"):
+    for stray in ("ops/systemd", "ops/cron", "pipelines", "norms", "checks"):
         if ctx.exists(stray):
             yield ("ERROR", f"{stray}/ 不该存在",
-                   "部署配置随服务/产线走（services/*/deploy、pipelines/*/deploy），"
+                   "部署配置随服务/流程走（services/*/deploy、workflows/*/deploy）；"
+                   "pipelines→workflows、norms→policies、checks→evolution/gates 已改名，"
                    "集中放会让新增成员必须改公共目录——那正是本规则要防的")

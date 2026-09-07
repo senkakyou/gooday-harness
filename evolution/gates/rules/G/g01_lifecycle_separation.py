@@ -5,7 +5,7 @@
 580M 数据库快照全在版本库和代码目录里，.git 涨到 491M，清理时根本分不清
 哪些能删。分不清的根因是它们本来就不该在一起。
 
-注意：大文件本身交给 pre-commit 的 check-added-large-files 管（见 norms
+注意：大文件本身交给 pre-commit 的 check-added-large-files 管（见 policies
 「什么该外包」）。这条只管【类别错位】——某类东西出现在不该出现的位置。
 """
 import re
@@ -54,4 +54,4 @@ def check(ctx):
     for d in ("state", "logs", "media", "backups", "var", "tmp"):
         if ctx.exists(d):
             yield ("ERROR", f"仓库内出现 {d}/ 目录",
-                   "状态/日志/产物/备份一律在仓库外，见 norms G01 的位置表")
+                   "状态/日志/产物/备份一律在仓库外，见 policies G01 的位置表")

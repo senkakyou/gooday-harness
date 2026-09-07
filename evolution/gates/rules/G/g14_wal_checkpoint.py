@@ -18,7 +18,7 @@ CHECKPOINT = re.compile(r"wal_checkpoint", re.I)
 def check(ctx):
     for f in ctx.walk(".sh", ".py", under=None):
         rel = ctx.rel(f)
-        if rel.startswith(("checks/", "norms/", "docs/")):
+        if rel.startswith(("checks/", "policies/", "docs/")):
             continue
         lines = ctx.read(f).splitlines()
         for i, line in enumerate(lines):
