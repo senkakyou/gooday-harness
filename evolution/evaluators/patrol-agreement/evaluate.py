@@ -100,9 +100,32 @@ def collect_evidence(days):
 
 
 def score(ev):
-    """打分。**必须能判 fail**——从不判失败的评价器只会制造一切都好的错觉。"""
+    """打分。**必须能判 fail**——从不判失败的评价器只会制造一切都好的错觉。
+
+    ═══ 但「没数据」有两种，2026-09-07 之后必须分开 ═══════════════
+
+    本评价器原来把「没有可配对样本」一律判 fail，理由是：两边都没数据
+    和两边一致长得一样，而前者是故障。**当时对。**
+
+    切换完成后不再对：旧 patrol 已随 /opt/gooday 一起退役，
+    它的日志文件永久消失了。此时报「一致率 0.0%」读起来像
+    「新旧 patrol 不一致」——**而真相是比对对象根本不存在了**。
+    这条评价器每天 08:00 会永久 fail 一次，是纯噪音，
+    而噪音会训练人忽略告警。
+
+    所以判据分成：
+      · 旧日志文件【不存在】 → retired：对象已退役，本评价器使命完成
+      · 文件【在但没数据】   → 仍判 fail：旧 patrol 意外停了，那是故障
+    """
     pairs = ev["pairs"]
     reasons = []
+
+    if not os.path.exists(OLD_LOG):
+        return None, "retired", [
+            f"比对对象已退役：{OLD_LOG} 不存在。",
+            "旧 patrol 随 /opt/gooday 一起下线（2026-09-07 切换完成），",
+            "本评价器要回答的问题「新 patrol 能不能从影子切成生产」已不成立——",
+            "没有旧的可比了。处置见 docs/decisions/003-patrol-cutover.md。"]
 
     if not pairs:
         return 0.0, "fail", [
@@ -152,19 +175,22 @@ def main():
 
     at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     rec = {"id": eid, "evaluator": NAME, "target": "workflows/patrol",
-           "score": round(sc, 4), "verdict": verdict, "reasons": reasons,
+           "score": None if sc is None else round(sc, 4),
+           "verdict": verdict, "reasons": reasons,
            "evidence_refs": [ep], "at": at}
     rp = os.path.join(EVAL_DIR, f"{at[:10]}-{NAME}-{eid}.json")
     with open(rp, "w", encoding="utf-8") as f:
         json.dump(rec, f, ensure_ascii=False, indent=2)
 
-    icon = {"pass": "✅", "warn": "⚠️", "fail": "❌"}[verdict]
-    print(f"{icon} {NAME}: {verdict}  一致率 {sc:.1%}  "
+    icon = {"pass": "✅", "warn": "⚠️", "fail": "❌", "retired": "🗄️"}[verdict]
+    rate = "—" if sc is None else f"{sc:.1%}"
+    print(f"{icon} {NAME}: {verdict}  一致率 {rate}  "
           f"（配对 {len(ev['pairs'])} 轮，近 {days} 天）")
     for r in reasons:
         print(f"   {r}")
     print(f"   证据 → {ep}")
-    return 0 if verdict == "pass" else 1
+    # retired 不是失败：对象退役是预期状态，不该让 evaluate 工作流天天变红
+    return 0 if verdict in ("pass", "retired") else 1
 
 
 if __name__ == "__main__":

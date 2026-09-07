@@ -209,16 +209,38 @@ else
     # 4a. 冲突预检：端口与 server_name 是不是已经被别人占了
     for c in "${nginx_files[@]}"; do
         while read -r port; do
+            # 端口冲突检查【保留】：迁移已完成，但装到新机器、或本机装了别的
+            # 服务时照样会撞。这条不是迁移期专用的。
             if ss -lntp 2>/dev/null | grep -q ":${port}\b"; then
-                echo "    ⚠️ 端口 $port 已被占用（$(ss -lntp 2>/dev/null | grep ":${port}\b" | head -1 | sed 's/.*users:((//;s/).*//'))"
-                echo "       迁移期旧系统仍在服务，两套 nginx 不能同时持有同一端口。"
+                holder="$(ss -lntp 2>/dev/null | grep ":${port}\b" | head -1 | sed 's/.*users:((//;s/).*//')"
+                # 本项目自己的容器占着是正常的（重装/升级场景）
+                if [[ "$holder" == *nginx* ]] && docker ps --format '{{.Names}}' 2>/dev/null \
+                     | grep -q "^gooday-harness-nginx$"; then
+                    echo "    ℹ️  端口 $port 由本项目的 nginx 持有（重装场景，正常）"
+                else
+                    echo "    ⚠️ 端口 $port 已被占用（$holder）"
+                    echo "       两套 nginx 不能同时持有同一端口。"
+                fi
             fi
         done < <(grep -oP '(?<=listen )\d+' "$c" | sort -u)
 
+        # server_name 冲突：原来只查旧系统的 /opt/gooday/nginx/conf.d/。
+        # 那个目录已随切换改名消失（2026-09-07），写死单一路径的检查
+        # 从此永远查不到东西 —— 而它【不会报错，只是静默地什么都不查】，
+        # 正是本项目最怕的那种「结构在但没在起作用」。
+        # 改成扫本机所有 nginx 容器实际挂载的配置目录：迁移期查得到旧系统，
+        # 迁移完照样查得到别人装的 nginx。
         while read -r sn; do
-            if grep -rqs "server_name.*\b${sn}\b" /opt/gooday/nginx/conf.d/ 2>/dev/null; then
-                echo "    ⚠️ server_name '$sn' 与旧系统冲突（/opt/gooday/nginx/conf.d/）"
-            fi
+            while read -r d; do
+                [[ -d "$d" ]] || continue
+                [[ "$d" == "$NGINX_DIR" ]] && continue      # 本项目自己不算冲突
+                if grep -rqs "server_name.*\b${sn}\b" "$d" 2>/dev/null; then
+                    echo "    ⚠️ server_name '$sn' 与 $d 里的配置冲突"
+                fi
+            done < <(docker ps --format '{{.Names}}' 2>/dev/null \
+                     | xargs -r -I{} docker inspect {} \
+                         --format '{{range .Mounts}}{{if eq .Destination "/etc/nginx/conf.d"}}{{.Source}}{{end}}{{end}}' \
+                       2>/dev/null | grep -v '^$' | sort -u)
         done < <(grep -oP '(?<=server_name )[^;]+' "$c" | tr ' ' '\n' | grep -v '^$' | sort -u)
     done
 
