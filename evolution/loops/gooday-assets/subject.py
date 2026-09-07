@@ -232,17 +232,35 @@ class GoodayAssets:
             raise RuntimeError(
                 f"字段 {sorted(missing)} 在可改白名单里，但 checkpoint 没存它，"
                 "回滚会不完整。请让 checkpoint() 与本函数都从 ALLOWED_FIELDS 派生")
+        # 【反向也要校验】：fields 来自 checkpoint 的 JSON，而 checkpoint 文件
+        # 正是为人工恢复才落盘的、会被手改的东西。它直接拼进
+        # `SET {f}=?` 和 `SELECT {','.join(fields)}` —— 不校验就等于
+        # rollback 这条路绕过了整个白名单。实测：改一份 checkpoint 加上
+        # IsPublished，回滚就能把工具下架。
+        # _apply 那边写着「边界必须在最靠近写操作的地方再确认一次」，
+        # 这一侧当时没确认（灵犀第四轮发现）。
+        extra = set(fields) - self.ALLOWED_FIELDS
+        if extra:
+            raise RuntimeError(
+                f"checkpoint 里的字段 {sorted(extra)} 不在自动改动白名单内，"
+                "拒绝回滚。checkpoint 文件可能被改过")
 
         want = set(ids) if ids is not None else set(self._touched or [])
         report = {"restored": [], "problems": [], "unknown_state": False}
         if not want:
+            # 【不能在这里提前 return】——那样就绕过了末尾的留痕，
+            # 于是「一行没滚」既无 trace、引擎又照样写 status=rolled_back，
+            # **记录说已回滚、实际什么都没做**。而这条路径正是文档里写的
+            # 人工恢复场景（新建 subject，_touched 是空的）。
+            # 这是最该留痕的一条，第一版偏偏是唯一不留痕的（灵犀第四轮发现）。
             report["problems"].append("没有记录本轮改过哪些行，未执行任何回滚")
-            return report
 
+        seen = set()
         for row in ckpt.get("rows", []):
             tid = row.get("Id")
             if tid not in want:
                 continue
+            seen.add(tid)
             sets = ", ".join(f"{f}=?" for f in fields)
             try:
                 n = self._exec(self.db, f"UPDATE Tools SET {sets} WHERE Id=?;",
@@ -257,6 +275,11 @@ class GoodayAssets:
                 report["problems"].append(f"Id={tid} 已不存在（checkpoint 之后被删），无可回滚")
                 continue
             report["restored"].append(tid)
+
+        # ② want 里有、checkpoint 里没有 —— 零动作却报干净，同一个静默家族
+        for tid in sorted(want - seen, key=str):
+            report["problems"].append(
+                f"Id={tid} 不在 checkpoint 里，无法回滚（id 类型不符？传错了？）")
 
         # 回读校验：不校验的话，回滚失败和回滚成功长得一模一样
         for tid in list(report["restored"]):
@@ -301,10 +324,15 @@ class GoodayAssets:
             if tp not in _sys.path:
                 _sys.path.insert(0, tp)
             from trace import Task
-            with Task("gooday-assets-rollback", actor="gooday-assets") as t:
-                t.event(kind, level, payload)
-        except Exception:
-            pass                          # 留痕失败不能反过来盖掉原始故障
+            with Task("gooday-assets-rollback", subject=str(self._touched or []),
+                      actor="gooday-assets") as t:
+                t.event(kind, level, dict(payload, touched=self._touched,
+                                          db=self.db))
+        except Exception as e:
+            # 留痕失败不能反过来盖掉原始故障，但**也不能一声不吭** ——
+            # 这是最后一道证据，它自己失败时至少要有人看得见。
+            print(f"[gooday-assets] ⚠️ 留痕失败（原始事件 {kind}/{level} 丢失）: {e}",
+                  file=__import__("sys").stderr, flush=True)
 
 
     # ── 内部 ────────────────────────────────────────────────

@@ -439,6 +439,43 @@ subprocess.run(["sqlite3", DB, "DELETE FROM Tools WHERE Id IN (40,41,42);"],
 for f in (pg, sec):
     os.unlink(f)
 
+# ⑮ 灵犀第四轮 —— 我在自己最当心的那条线上引入的洞
+import glob as _glob, json as _json
+def _trace_events():
+    out = []
+    for f in _glob.glob(os.path.join(os.environ["GOODAY_HARNESS_STATE"], "events", "*.jsonl")):
+        for line in open(f, encoding="utf-8"):
+            try: out.append(_json.loads(line))
+            except Exception: pass
+    return out
+
+# ⑮a 「没什么可滚」原来是唯一一条不落痕的路径：
+#     一行没滚 → 无 trace → 引擎照样写 status=rolled_back，记录说已回滚而实际没做
+n0 = len([e for e in _trace_events() if "rollback" in str(e.get("type"))])
+rep_e = S().rollback(S().checkpoint())          # 新建 subject，_touched 空
+n1 = len([e for e in _trace_events() if "rollback" in str(e.get("type"))])
+check("「没什么可滚」也要落痕（最该留痕的一条）", n1 > n0, f"{n0}→{n1}")
+
+# ⑮b want 非空但没命中 checkpoint 任何行 → 不许返回干净报告
+s_miss = S(); s_miss._touched = [999999]
+rep_m = s_miss.rollback(S().checkpoint())
+check("want 里的 id 不在 checkpoint 里 → 记进 problems（不许零动作报干净）",
+      any("不在 checkpoint" in x for x in rep_m["problems"]), rep_m)
+
+# ⑮c checkpoint 被改过时，rollback 不许绕过字段白名单
+s_bad = S(); s_bad._touched = [1]
+try:
+    s_bad.rollback({"rows": [{"Id": 1, "IsPublished": 0, "DownloadFileName": "ok.html",
+                              "HasDownload": 1, "OnlineUrl": "/uploads/ok.html"}],
+                    "fields": ["DownloadFileName", "HasDownload", "OnlineUrl", "IsPublished"]})
+    check("改过的 checkpoint 不能让 rollback 绕过白名单", False, "居然放行了 IsPublished")
+except RuntimeError as e:
+    check("改过的 checkpoint 不能让 rollback 绕过白名单", "不在自动改动白名单" in str(e),
+          str(e)[:60])
+pubchk = subprocess.run(["sqlite3", DB, "SELECT IsPublished FROM Tools WHERE Id=1;"],
+                        capture_output=True, text=True).stdout.strip()
+check("上一条被拒后 IsPublished 未被改动", pubchk == "1", pubchk)
+
 # ⑦ 端到端：真的能收敛
 subject = S()
 scores = []

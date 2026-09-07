@@ -58,7 +58,11 @@ def build():
     return Loop(
         "gooday-assets", subject,
         evaluator=phases.evaluate,
-        learner=lambda ev, res: phases.learn(ev, res,
+        # 【media 必须从 subject 取，不能让 learn 回落到环境变量】：
+        # subject.media 一旦与 env 不同（测试、多实例），relpath 会算出
+        # `../..` 垃圾路径，Gate 报「没有实质进展」把真因盖掉 ——
+        # 和 OnlineUrl 前缀那个 bug 是同一个故障、同一种掩盖方式。
+        learner=lambda ev, res: phases.learn(ev, res, media=subject.media,
                                              all_refs=subject.all_refs()),
         improver=phases.improve,
         gate=phases.make_gate(baseline_results),

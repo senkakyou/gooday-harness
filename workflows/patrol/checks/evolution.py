@@ -134,7 +134,32 @@ def run(cfg):
                "fix": f"读 {p}，核对副本与真身的环境差异",
                "action": None}
 
-    # ④ 业务闭环必须真的在转 —— canary 绿不代表业务闭环在跑。
+    # ④ Decision 卡在 experimenting = 记录在说谎
+    #
+    # 引擎里 rollback 抛异常时，紧跟其后的 dec.update(status=...) 和
+    # _write(dpath, dec) 都不执行，Decision 就永远停在 experimenting ——
+    # 而那一刻生产已经被 promote 改过、可能也已回滚。
+    # 「decision 不说谎」本该是引擎的不变式，但 loop.py 是冻结的；
+    # 在动它之前，先用一条加法规则把这个状态兜住（灵犀第四轮建议）。
+    stuck_min = ec.get("stuck_decision_minutes", 30)
+    for path, d in recent:
+        if d.get("status") != "experimenting":
+            continue
+        try:
+            age = (time.time() - os.path.getmtime(path)) / 60
+        except OSError:
+            continue
+        if age > stuck_min:
+            yield {"level": "P0",
+                   "what": f"Decision 卡在 experimenting {age:.0f} 分钟：{d.get('loop')}",
+                   "why": f"目标={d.get('target')}。一轮闭环不该跑这么久 —— "
+                          "多半是 promote/rollback 中途抛异常，引擎没走到写状态那一步。"
+                          "**此刻生产可能已被改过，而记录说还在实验中**",
+                   "fix": f"读 {path} 和同时段的 trace 事件（rollback_incomplete / "
+                          "cycle_crashed），确认真身状态；必要时按 checkpoint 手工回滚",
+                   "action": None}
+
+    # ⑤ 业务闭环必须真的在转 —— canary 绿不代表业务闭环在跑。
     #    canary 只证明「Harness 这套机器还活着」，它每天都会 promoted；
     #    如果只看整体有没有决策，业务闭环停了一个月也看不出来。
     #    所以按闭环名分别查（2026-09-07 接入 gooday-assets 时补的）。
@@ -147,7 +172,7 @@ def run(cfg):
                    "fix": f"手动跑 python3 workflows/evolve/run.py 看 {name} 报什么",
                    "action": None}
 
-    # ⑤ 转而不学：有决策却长期没有新经验
+    # ⑥ 转而不学：有决策却长期没有新经验
     em, est = _newest(exp_dir)
     if est == "ok" and mt:
         if (mt - em) / 3600 > 48:

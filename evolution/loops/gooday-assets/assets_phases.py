@@ -165,7 +165,10 @@ def improve(experiences, evaluation):
             # 结果是改名的在线页永远修不好，也永远没人知道为什么（灵犀评审发现）。
             rel = e["twin_rel"] if e["twin_rel"].startswith("/") else "/" + e["twin_rel"]
             if it["field"] == "DownloadFileName":
-                new = rel[len("/uploads/"):] if rel.startswith("/uploads/") else rel.lstrip("/")
+                # 不在 /uploads 下的绝对路径要【保留前导斜杠】：
+                # run() 和 all_refs() 都容忍绝对 DownloadFileName（不再补前缀），
+                # 而 lstrip("/") 会让 run() 再补一次 /uploads/。三处规则必须一致。
+                new = (rel[len("/uploads/"):] if rel.startswith("/uploads/") else rel)
             else:
                 new = rel
             cands.append({

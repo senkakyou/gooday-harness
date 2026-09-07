@@ -101,7 +101,8 @@
     "max_age_hours": 26,
     "business_loops": [
       "gooday-assets"
-    ]
+    ],
+    "stuck_decision_minutes": 30
   },
   "bot_inbox": {
     "_": "bot 收件箱巡检。dup_limit 是「N 分钟内向同一人发 N 条」的告警线",
