@@ -209,6 +209,21 @@ def make_gate(baseline_results):
     base_present = len(was_ok)
     base_broken = len(baseline_results) - base_present
 
+    def _refs(items):
+        """(工具Id, 文件真实路径) 的集合。
+
+        粒度必须是「哪个工具引用了哪个文件」，不能是「这个文件被几个工具引用」：
+        后者放不过「同一工具的在线页与下载指向同一文件」这种正当情形
+        （真实的 Tools[14] 就是），也挡不住 fixture 里那种预先共用的情况。
+        """
+        return {(r["id"], os.path.realpath(r["path"]))
+                for r in items if r.get("exists")}
+
+    base_refs = _refs(baseline_results)
+    base_owner = {}
+    for tid, path in base_refs:
+        base_owner.setdefault(path, set()).add(tid)
+
     def gate(variant, inputs, baseline):
         res = variant.run(inputs)
         ev = evaluate(res, inputs)
@@ -236,6 +251,26 @@ def make_gate(baseline_results):
                 (broken < base_broken and present >= base_present)):
             reasons.append(f"没有实质进展：可达 {base_present}→{present}，"
                            f"缺失 {base_broken}→{broken}")
+
+        # ⑤ 【不许新引入「两个工具指向同一个文件」】
+        #
+        # 自查时用攻击用例打出来的洞：把坏项的 DownloadFileName 改成指向
+        # 另一个工具的现有文件 —— 可达数从 4 涨到 5、分数 1.0，
+        # 前四条判据【全部放行】，因为从 Gate 的视角这看起来就是「修好了」。
+        #
+        # Learn 那边的 taken 判据能挡住*生成*这种候选，但 Gate 自己没有防御。
+        # 而 improve 迟早要换成模型驱动的 —— 到那时 Gate 就是唯一一道线，
+        # **纵深防御不能只有一层**。
+        #
+        # 判据是「新引入的共用」而不是「任何共用」：基线里本来就共用的
+        # （同一工具的在线页和下载指同一个文件是正当的）不算。
+        for tid, path in _refs(res) - base_refs:
+            others = base_owner.get(path, set()) - {tid}
+            if others:
+                reasons.append(
+                    f"工具 {tid} 新指向了 {os.path.basename(path)}，"
+                    f"而该文件原本属于工具 {sorted(others)} —— "
+                    "把坏项指向别人的文件会让分数变好看，而用户下到的是别人的内容")
 
         return {"passed": not reasons, "score": ev["score"],
                 "present": present, "broken": broken,

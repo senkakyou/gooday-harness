@@ -341,6 +341,41 @@ os.utime(stale, (time.time() - 7 * 3600, time.time() - 7 * 3600))
 S().variant({"id": 1, "field": "DownloadFileName", "value": "ok.html"}).cleanup()
 check("variant() 开头清掉超过 6 小时的遗留变体库", not os.path.exists(stale))
 
+# ⑬ 对 Gate 做攻击测试 —— 自查时找到一个真洞
+#    「把坏项指向别人的现有文件」：可达数上升、分数 1.0，
+#    前四条判据全部放行，因为从 Gate 的视角这看起来就是「修好了」。
+#    Learn 的 taken 判据能挡住生成，但 Gate 自己没有防御 ——
+#    improve 迟早换成模型驱动的，那时 Gate 就是唯一一道线。
+atk_base = S().run(None)
+atk_gate = phases.make_gate(atk_base)
+atk_score = phases.evaluate(atk_base)["score"]
+
+ATTACKS = [
+    ("把坏项指向别人的现有文件（安静的错误）",
+     {"id": 3, "field": "DownloadFileName", "value": "twin.html"}, False),
+    ("把健康工具的下载也关掉（缩分母提分）",
+     {"id": 1, "field": "HasDownload", "value": 0}, False),
+    ("把健康项的在线地址清空（藏掉一项）",
+     {"id": 1, "field": "OnlineUrl", "value": ""}, False),
+    ("把坏项的下载关掉（正当缓解）",
+     {"id": 3, "field": "HasDownload", "value": 0}, True),
+]
+for desc, patch, should_pass in ATTACKS:
+    va = S().variant(patch)
+    ga = atk_gate(va, None, atk_score)
+    check(f"Gate：{desc} → {'放行' if should_pass else '拦住'}",
+          ga["passed"] == should_pass,
+          f"实际{'放行' if ga['passed'] else '拦住'}；{ga['reasons'][0][:70]}")
+    va.cleanup()
+
+# 反面：基线里本来就共用的文件不算「新引入的共用」，
+# 否则「同一工具的在线页与下载指同一文件」这种真实正当场景会被误拦
+same = S().variant({"id": 2, "field": "DownloadFileName", "value": "twin.html"})
+gs = atk_gate(same, None, atk_score)
+check("同一工具的在线页与下载指同一文件 → 不算新共用，不误拦",
+      gs["passed"], gs["reasons"][0][:80])
+same.cleanup()
+
 # ⑦ 端到端：真的能收敛
 subject = S()
 scores = []
