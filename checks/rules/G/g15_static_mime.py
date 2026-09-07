@@ -27,12 +27,12 @@ MAPPING = re.compile(r"Mappings\s*\[\s*['\"]\.([a-z0-9]{2,5})['\"]\s*\]")
 
 def check(ctx):
     program = None
-    for f in ctx.walk(".cs", under="apps/api"):
+    for f in ctx.walk(".cs", under="services/api"):
         if f.endswith("Program.cs"):
             program = f
             break
     if not program:
-        yield ("SKIP", "未找到 apps/api/Program.cs", "")
+        yield ("SKIP", "未找到 services/api/Program.cs", "")
         return
 
     src = ctx.read(program)

@@ -46,8 +46,8 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 
 | 类别 | 位置 | 进 git |
 |---|---|---|
-| 代码 | `apps/` `pipelines/` `checks/` | ✅ |
-| 配置 | `ops/` | ✅ |
+| 代码 | `services/` `pipelines/` `packages/` `checks/` | ✅ |
+| 配置 | 随服务/产线走（`*/deploy/`）+ 全局 `ops/` | ✅ |
 | 规范 | `norms/` `docs/` | ✅ |
 | **状态** | `/var/lib/gooday/state/` | ❌ 可重建 |
 | **日志** | `/var/log/gooday/` | ❌ 滚动 |
@@ -60,8 +60,8 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 
 ### G02 目录即契约 `[可检查]`
 
-`apps/` `pipelines/` 下每个子目录必须有 `README.md`，且含「判据」章节，
-判据必须可证伪。
+`services/` `pipelines/` `packages/` 下每个成员必须有 `README.md`，且含「判据」章节，
+判据必须可证伪。`_template/` 与 `_shared/` 这类下划线开头的不是成员，不查。
 
 | ❌ 不算判据 | ✅ 算判据 |
 |---|---|
@@ -72,7 +72,22 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 
 ### G03 单一真源 `[可检查]`
 
-同一份配置只能有一处。crontab 只在 `ops/cron/`，systemd 只在 `ops/systemd/`。
+**「单一真源」不等于「集中存放」。**
+
+配置跟着**归属方**走，且只有那一份：
+
+| 配置 | 归属 |
+|---|---|
+| 服务 unit / drop-in | `services/<名>/deploy/` |
+| 产线 cron 片段 | `pipelines/<名>/deploy/` |
+| 全局（nginx 等） | `ops/nginx/` |
+
+集中存放（所有 `.service` 塞进 `ops/systemd/`）反而制造问题：
+新增成员必须改公共目录，而改公共目录就会漏——那是 G06 要防的事故。
+
+**汇总产物不入库**：crontab 与 systemd 单元由 `ops/install.sh` 从各归属方汇总生成，
+版本库里再留一份必然与真源分叉。
+
 **禁止手工 `.bak` 版本备份**——版本库本身就是干这个的。
 
 > 教训：上一版 `scripts/` 里有 `crontab.bak`、`crontab.bak.20260811`、
@@ -80,7 +95,10 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 
 ### G04 部署可重建 `[可检查]`
 
-`ops/` 下所有配置必须被 `ops/install.sh` **整目录扫描**安装，不得写死文件名。
+`ops/install.sh` 必须对扩展点做**通配扫描**（`services/*/deploy`、`pipelines/*/deploy`、
+`ops/nginx/*`），**永远不列举成员**。它还必须创建仓库外的四个位置（G01）。
+
+与 G06 的分工：**G06 查成员符不符合模板，G04 查安装脚本认不认得新成员。**
 
 > 教训：`claudecred.conf` 已在服务器上生效，但安装脚本只写死装 `memorymax.conf`。
 > 一旦重装，bot 退回读失效凭据，表现是「活着但答不出话」，心跳和 systemd 全绿。
@@ -91,6 +109,27 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 
 > 教训：提示词注入防御条款写进文档三个月，**一个 bot 的 prompt 里都没有**。
 > 没有检查器的规范，就是一份没人读的文档。
+
+### G06 扩展点契约 `[可检查]`
+
+**新增一个成员 = 复制一个模板目录，不改任何现有文件。**
+
+五个扩展点，每个自带 `_template/`：
+
+| 扩展点 | 新增方式 | 成员必须有 |
+|---|---|---|
+| `services/` | `cp -r services/_template services/<名>` | `README.md`、`deploy/unit.service` |
+| `pipelines/` | `cp -r pipelines/_template pipelines/<名>` | `README.md`、`deploy/schedule.cron` |
+| `packages/` | `cp -r packages/_template packages/<名>` | `README.md` |
+| `norms/{H,C,G}/` | 丢一个 `.md` 进去 | 条目登记进本表 |
+| `checks/rules/{H,C,G}/` | 丢一个 `.py` 进去 | `RULE` / `TITLE` / `check(ctx)` |
+
+**部署配置随服务走，不集中放**——`services/<名>/deploy/` 而不是 `ops/systemd/`。
+`ops/install.sh` 只做通配扫描，永远不列举成员。
+
+> 教训：上一版新增 drop-in 必须手工改安装脚本。结果 `claudecred.conf`
+> 在服务器上生效了、脚本没同步，重装即静默丢配置——bot「活着但答不出话」，
+> 心跳和 systemd 全绿。**根因不是忘了改，是结构要求你记得改。**
 
 ---
 

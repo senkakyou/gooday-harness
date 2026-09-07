@@ -14,7 +14,7 @@ INPUTISH = re.compile(r"<(input|textarea|select)\b", re.I)
 
 
 def check(ctx):
-    for f in ctx.walk(".jsx", ".tsx", ".js", ".ts", under="apps/web"):
+    for f in ctx.walk(".jsx", ".tsx", ".js", ".ts", under="services/web"):
         lines = ctx.read(f).splitlines()
         for i, line in enumerate(lines):
             m = FONT.search(line)

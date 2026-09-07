@@ -8,17 +8,44 @@
 Gooday 是一个由 AI 员工运营的数字公司 + 内容平台。
 客户下单、方案、开发、交付、收款由六个 AI 角色完成；内容产线自动出片上架。
 
-## 三十秒定位
+## 目录结构
 
-| 我要改… | 去 |
-|---|---|
-| 网站后端 / 前端 | `apps/api/` `apps/web/` |
-| AI 员工（灵犀/如意/擎天柱/威震天/招财） | `apps/bots/<角色>/` |
-| 调度器 / 巡检 / 公共库 | `apps/bots/_core/` |
-| 听书、时光机、数学等内容产线 | `pipelines/<产线>/` |
-| systemd / cron / nginx / docker | `ops/` |
-| 规范本身 | `norms/` |
-| 检查器 | `checks/` |
+**五个扩展点，各自带 `_template/`。新增成员 = 复制模板，不改任何现有文件。**
+
+```
+services/     长驻进程：一个目录 = 一个可独立部署的服务
+              api  web  bot-灵犀  bot-如意  dispatcher  patrol …
+              └── <名>/{README.md, main.py, deploy/unit.service}
+
+pipelines/    内容产线：一个目录 = 一条产线
+              └── <名>/{README.md, run.py, deploy/schedule.cron}
+
+packages/     跨服务共用库（被 ≥2 处用到才放这儿）
+              └── <名>/{README.md, ...}
+
+norms/        规范，三层：H(通用) C(数字公司) G(本项目)
+checks/rules/ 检查器，同样三层，一条规范一个文件
+
+ops/          不属于任何单个服务的：install.sh  nginx/  runbooks/
+kits/         可分发产品   docs/{specs,incidents}/   content/  创作源
+```
+
+**部署配置随服务走**（`services/<名>/deploy/`），不集中放 `ops/`。
+`ops/install.sh` 只做通配扫描，永远不列举成员——所以新增服务不用改它。
+
+**仓库外**（G01，不进 git）：
+`/var/lib/gooday/state/` 状态 · `/var/log/gooday/` 日志 ·
+`/srv/gooday/media/` 产物 · `/srv/gooday/backups/` 备份
+
+## 新增一个东西
+
+```bash
+cp -r services/_template  services/<名>      # 加服务
+cp -r pipelines/_template pipelines/<名>     # 加产线
+cp -r packages/_template  packages/<名>      # 加共用库
+# 加规范：norms/<层>/ 丢 .md + checks/rules/<层>/ 丢 .py，两边同一提交
+sudo bash ops/install.sh                     # 装上，不需要改这个脚本
+```
 
 ## 五条铁律
 

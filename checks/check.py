@@ -91,14 +91,23 @@ class Ctx:
 
 
 def load_rules():
-    """加载 rules/ 下所有规则模块。文件名即顺序。"""
+    """递归加载 rules/**/*.py。
+
+    目录分层（rules/H、rules/C、rules/G）对应 norms/ 的三层，
+    但加载不关心在哪一层——【新增一条规范 = 丢一个文件进去，不改本文件】。
+    这是 G06 扩展点契约对检查器自己的要求。
+    """
     out = []
     if not os.path.isdir(RULES_DIR):
         return out
-    for fn in sorted(os.listdir(RULES_DIR)):
-        if not fn.endswith(".py") or fn.startswith("_"):
-            continue
-        p = os.path.join(RULES_DIR, fn)
+    found = []
+    for dp, dns, fns in os.walk(RULES_DIR):
+        dns[:] = [d for d in dns if d != "__pycache__"]
+        for fn in fns:
+            if fn.endswith(".py") and not fn.startswith("_"):
+                found.append(os.path.join(dp, fn))
+    for p in sorted(found, key=lambda x: os.path.basename(x)):
+        fn = os.path.basename(p)
         spec = importlib.util.spec_from_file_location(fn[:-3], p)
         mod = importlib.util.module_from_spec(spec)
         try:

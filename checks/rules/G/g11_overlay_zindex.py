@@ -20,7 +20,7 @@ ZI = re.compile(r"zIndex\s*:\s*(\d+)")
 
 
 def check(ctx):
-    for f in ctx.walk(".jsx", ".tsx", under="apps/web"):
+    for f in ctx.walk(".jsx", ".tsx", under="services/web"):
         lines = ctx.read(f).splitlines()
         for i, line in enumerate(lines):
             if not FIXED.search(line):

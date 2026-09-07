@@ -20,7 +20,7 @@ SQL_AMOUNT = re.compile(r"\b(Amount|Price|EstimatedPrice|Total)\s*(?:>|<|>=|<=)\
 
 
 def check(ctx):
-    for f in ctx.walk(".cs", under="apps/api"):
+    for f in ctx.walk(".cs", under="services/api"):
         for i, line in enumerate(ctx.read(f).splitlines(), 1):
             if line.lstrip().startswith("//"):
                 continue

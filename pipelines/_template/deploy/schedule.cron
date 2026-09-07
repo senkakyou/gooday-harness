@@ -1,0 +1,17 @@
+# 本产线的定时任务。ops/install.sh 会把 pipelines/*/deploy/schedule.cron
+# 全部汇总成【唯一】的 crontab（G03 单一真源）。
+#
+# 只写任务行，不要写 SHELL= / PATH= —— 那些由 install.sh 统一加在头部，
+# 每条产线各写一份必然分叉。
+#
+# 占位符 {{NAME}} 由安装脚本按目录名替换。
+#
+# ⚠️ 每行必须自带 env 加载：
+#    cron 默认 SHELL=/bin/sh(dash)，没有 source 命令，整行会【静默失败且不生成日志】。
+#    而 .env 里没有 export，光 source 也传不给 python 子进程，所以要 set -a 包起来。
+#    历史：日报 cron 因此连续多天没发，无人发觉。
+#
+# ⚠️ 装完必须等一个执行周期，确认日志文件【真的出现】。crontab -l 正常不算数。
+
+# 每天 09:00 出片
+0 9 * * * bash -c 'set -a; source /opt/gooday/.env; set +a; python3 /opt/gooday/pipelines/{{NAME}}/run.py' >> /var/log/gooday/{{NAME}}.log 2>&1

@@ -10,12 +10,19 @@ import re
 RULE = "G02"
 TITLE = "目录即契约"
 
-SCAN_UNDER = ("apps", "pipelines")
+SCAN_UNDER = ("services", "pipelines", "packages")
 CRITERIA_HEAD = re.compile(r"^#{1,4}\s*(判据|验收|通过标准|成功标准)", re.M)
 
 # 无法判定真假的措辞——出现即判不合格
 VAGUE = ("更好用", "更方便", "更丰富", "提升体验", "优化体验",
          "跑通", "完善", "增强", "改善", "尽量", "更稳定")
+
+# 模板残留哨兵：复制了 _template 却没填，是最容易发生的失败。
+# 模板里的示例判据自带数字，不设哨兵的话照抄就能通过检查——
+# 那 G02「必须有判据」就成了摆设。（2026-09-07 实测复制模板后 0 报错才发现）
+TEMPLATE_MARKS = ("本文件是模板", "&lt;名字&gt;", "<名字>", "cp -r services/_template",
+                  "cp -r pipelines/_template", "cp -r packages/_template",
+                  "一句话说明")
 
 
 def check(ctx):
@@ -33,6 +40,14 @@ def check(ctx):
                 continue
 
             body = ctx.read(readme)
+
+            left = [k for k in TEMPLATE_MARKS if k in body]
+            if left:
+                yield ("ERROR", f"{rel}/README.md 还是模板没填（残留：{left[0]}）",
+                       "照模板复制出来之后要真写：它做什么、明确不做什么、"
+                       "判据是什么。不填的话这个模块没人知道算不算成功")
+                continue
+
             m = CRITERIA_HEAD.search(body)
             if not m:
                 yield ("ERROR", f"{rel}/README.md 缺「判据」章节",
@@ -51,4 +66,4 @@ def check(ctx):
                        "判据要能被机械判定，通常意味着有阈值和时间窗")
 
     if not seen:
-        yield ("SKIP", "apps/ 与 pipelines/ 下暂无模块", "")
+        yield ("SKIP", "services/ pipelines/ packages/ 下暂无成员", "")
