@@ -115,8 +115,19 @@ def main():
             os.makedirs(daily, exist_ok=True)
 
             if not os.path.exists(db):
-                failures.append(f"{name}: 源库不存在 {db}")
-                task.event("source_missing", "P0", {"target": name, "db": db})
+                # 【区分「不存在」和「看不见」】。父目录不可读时 os.path.exists
+                # 也返回 False——报「源库不存在」会让人去找一个没丢的文件。
+                # 今天在 db_health、migration 上已经栽过同一形态两次。
+                parent = os.path.dirname(db)
+                if not os.access(parent, os.R_OK | os.X_OK):
+                    why = (f"{parent} 对当前身份不可读，无法判断 {db} 的状态"
+                           f"（备份需以能读该路径的身份跑，cron 用 root）")
+                    task.event("source_unreadable", "P1",
+                               {"target": name, "db": db, "why": why})
+                else:
+                    why = f"源库确实不存在：{db}（父目录可读）"
+                    task.event("source_missing", "P0", {"target": name, "db": db})
+                failures.append(f"{name}: {why}")
                 continue
 
             tmp = os.path.join(hourly, f".{name}-{hour}.db.tmp")
