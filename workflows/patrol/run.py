@@ -27,6 +27,12 @@ from trace import Task                                    # noqa: E402
 
 CHECKS_DIR = os.path.join(HERE, "checks")
 CONFIG = os.path.join(HERE, "config.json")
+TRACE_ROOT = os.environ.get("GOODAY_HARNESS_STATE", "/var/lib/gooday-harness")
+
+
+def _trace_alive(task):
+    """本轮的 Task 文件到底落盘了没有。落不了就说明证据链是断的。"""
+    return os.path.exists(os.path.join(TRACE_ROOT, "tasks", f"{task.id}.json"))
 
 
 def load_config():
@@ -97,6 +103,19 @@ def main():
             except Exception as e:
                 task.event("action_failed", "P1",
                            {"check": f["check"], "ran": act, "error": str(e)})
+
+        # 自检：证据链是不是真的写进去了。
+        # 实测踩到：/var/lib 属主是 root 而巡检以别的身份跑，trace 全部 PermissionError。
+        # trace 的设计是「不抛异常」，于是 patrol 照常跑完、报「一切正常」、退出 0——
+        # 而它这一轮什么都没记下。**这正是本项目要消灭的假绿。**
+        # 所以巡检必须把「我自己的记录能力」也当成一项来查。
+        if not _trace_alive(task):
+            findings.append({
+                "check": "self", "level": "P1",
+                "what": "证据链写不进去，本轮巡检没有留下任何记录",
+                "why": f"{TRACE_ROOT} 下写入失败（权限？磁盘满？）。"
+                       f"trace 按设计不抛异常，所以巡检看起来一切正常，实际什么都没记",
+                "fix": f"确认 {TRACE_ROOT} 对当前身份可写", "action": None})
 
         worst = min((f.get("level", "P3") for f in findings), default="P3")
         task.event("patrol_summary", "P3", {

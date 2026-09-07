@@ -29,6 +29,14 @@ log "创建仓库外目录"
 # state=服务状态；tasks/events/evidence/evaluations/checkpoints=第二层循环的证据链（G07）
 install -d -m 755 /var/lib/gooday-harness/{state,tasks,events,evidence,evaluations,checkpoints} \
                   /var/log/gooday-harness /srv/gooday-harness/media /srv/gooday-harness/backups
+# 属主对齐仓库属主：证据链要能被「跑 workflow 的那个身份」写入。
+# 只留 root 可写的话，手动跑一次就全是 PermissionError，
+# 而 trace 的设计是「不抛异常」——于是会安静地丢掉整条证据链（实测过）。
+REPO_OWNER="$(stat -c '%U' "$REPO")"
+if [[ "$REPO_OWNER" != root ]]; then
+    chown -R "$REPO_OWNER" /var/lib/gooday-harness /var/log/gooday-harness /srv/gooday-harness
+    echo "    属主 → $REPO_OWNER（root 仍可写）"
+fi
 
 # ── 2. services/*/deploy —— 通配扫描 ───────────────────────────────────
 log "安装服务单元"
@@ -84,6 +92,13 @@ crontab -l 2>/dev/null | sed "\|^${BEGIN_MARK}\$|,\|^${END_MARK}\$|d" > "$CRON_T
         [[ "$name" == _* ]] && continue
         sched="$dir/deploy/schedule.cron"
         [[ -f "$sched" ]] || continue
+        # 缺 config.json 就从 example 播种。
+        # 不做这一步的话，install 会报告成功、而部署出来的东西一跑就退出——
+        # 「装完了」不等于「能跑」（G08）。
+        if [[ -f "$dir/config.example.json" && ! -f "$dir/config.json" ]]; then
+            cp "$dir/config.example.json" "$dir/config.json"
+            echo "    ℹ️  $name：已从 config.example.json 播种 config.json，记得按本机改"
+        fi
         echo "# ── $name ──"
         grep -v '^\s*#' "$sched" | grep -v '^\s*$' | sed "s/{{NAME}}/$name/g"
         install -d -m 755 "/var/lib/gooday-harness/state/$name" \
