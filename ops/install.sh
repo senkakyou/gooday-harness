@@ -94,12 +94,58 @@ crontab -l 2>/dev/null | sed "\|^${BEGIN_MARK}\$|,\|^${END_MARK}\$|d" > "$CRON_T
 crontab "$CRON_TMP" && rm -f "$CRON_TMP"
 echo "    托管块已更新，块外任务原样保留"
 
-# ── 4. ops/nginx/* —— 通配扫描 ─────────────────────────────────────────
-log "安装 nginx 配置"
-for c in "$REPO"/ops/nginx/*.conf; do
-    install -m 644 "$c" "/etc/nginx/conf.d/$(basename "$c")"
-    echo "    $(basename "$c")"
-done
+# ── 4. ops/nginx/* —— 装进本项目自己的目录，并【验证真的会被读到】 ──────
+#
+# ⚠️ 别想当然往 /etc/nginx/conf.d 写。
+#
+# 2026-09-07 实测：这台机器【宿主机根本没有 nginx】（systemctl 显示 inactive），
+# nginx 跑在容器里，配置来自 bind mount。往 /etc/nginx/conf.d 写会
+# 「写入成功、脚本显示 OK、实际零效果」——比冲突更难发现，因为没有任何报错。
+#
+# 所以本段的规矩是：**验证生效，不能只验证写入。**
+NGINX_DIR=/opt/gooday-harness/nginx/conf.d
+log "安装 nginx 配置 → $NGINX_DIR"
+install -d -m 755 "$NGINX_DIR"
+
+nginx_files=("$REPO"/ops/nginx/*.conf)
+if [[ ${#nginx_files[@]} -eq 0 ]]; then
+    echo "    （无配置，跳过）"
+else
+    # 4a. 冲突预检：端口与 server_name 是不是已经被别人占了
+    for c in "${nginx_files[@]}"; do
+        while read -r port; do
+            if ss -lntp 2>/dev/null | grep -q ":${port}\b"; then
+                echo "    ⚠️ 端口 $port 已被占用（$(ss -lntp 2>/dev/null | grep ":${port}\b" | head -1 | sed 's/.*users:((//;s/).*//'))"
+                echo "       迁移期旧系统仍在服务，两套 nginx 不能同时持有同一端口。"
+            fi
+        done < <(grep -oP '(?<=listen )\d+' "$c" | sort -u)
+
+        while read -r sn; do
+            if grep -rqs "server_name.*\b${sn}\b" /opt/gooday/nginx/conf.d/ 2>/dev/null; then
+                echo "    ⚠️ server_name '$sn' 与旧系统冲突（/opt/gooday/nginx/conf.d/）"
+            fi
+        done < <(grep -oP '(?<=server_name )[^;]+' "$c" | tr ' ' '\n' | grep -v '^$' | sort -u)
+    done
+
+    for c in "${nginx_files[@]}"; do
+        install -m 644 "$c" "$NGINX_DIR/$(basename "$c")"
+        echo "    $(basename "$c")"
+    done
+
+    # 4b. 生效验证：有没有【真的】有一个 nginx 在读这个目录
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^gooday-harness-nginx$'; then
+        docker exec gooday-harness-nginx nginx -t \
+            && docker exec gooday-harness-nginx nginx -s reload \
+            && echo "    ✅ 已验证语法并 reload"
+    elif systemctl is-active --quiet nginx 2>/dev/null; then
+        nginx -t && systemctl reload nginx && echo "    ✅ 已验证语法并 reload"
+    else
+        echo "    ⚠️ 配置已写入，但【没有任何 nginx 在读这个目录】——当前不生效。"
+        echo "       这台机器上 nginx 跑在容器里，宿主机没装。"
+        echo "       迁移期这是预期状态：旧系统的 gooday_nginx 仍独占 80/443。"
+        echo "       切换时才把本目录挂进 nginx 容器，见 docs/specs/002 缺口三。"
+    fi
+fi
 
 # ── 5. 生效 ────────────────────────────────────────────────────────────
 log "reload + 重启"
