@@ -26,7 +26,10 @@ POINTS = {
     "services":                ["README.md"],
     "workflows":               ["README.md", "deploy/schedule.cron"],
     "packages":                ["README.md"],
-    # 第二层循环的两个扩展点：评价器与实验
+    # 第二层循环的三个扩展点：闭环、评价器、实验
+    # loops 是 2026-09-07 接入真实业务闭环时补进来的——在那之前它没有契约，
+    # 于是 canary 加进去时没人检查它有没有说清「判据是什么」。
+    "evolution/loops":         ["README.md", "loop_def.py"],
     "evolution/evaluators":    ["README.md"],
     "evolution/experiments":   ["README.md"],
 }

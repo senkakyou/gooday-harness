@@ -98,7 +98,10 @@
   "_assets": "已发布内容的文件还在不在。这类丢失特别危险：页面照常列出来，点进去才 404，后台看起来一切正常。",
   "evolution": {
     "_": "进化闭环巡检。max_age_hours 按闭环的实际跑动频率设，留余量",
-    "max_age_hours": 26
+    "max_age_hours": 26,
+    "business_loops": [
+      "gooday-assets"
+    ]
   },
   "bot_inbox": {
     "_": "bot 收件箱巡检。dup_limit 是「N 分钟内向同一人发 N 条」的告警线",

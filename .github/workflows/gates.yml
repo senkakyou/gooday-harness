@@ -42,6 +42,11 @@ jobs:
       - name: 闭环失败路径自测
         run: python3 packages/evolve/test_loop.py
 
+      # Gooday 业务闭环的契约：分类/候选字段/隔离/Gate 三判据/fail-closed。
+      # 用假 Gooday 跑——CI 里没有真库真文件，但【契约必须能被机械验证】。
+      - name: Gooday 闭环契约（离线，不碰生产）
+        run: python3 evolution/loops/gooday-assets/test_loop_assets.py
+
       - name: 闭环端到端（自动收敛）
         env:
           GOODAY_HARNESS_STATE: ${{ runner.temp }}/harness-state

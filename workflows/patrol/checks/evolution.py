@@ -134,7 +134,20 @@ def run(cfg):
                "fix": f"读 {p}，核对副本与真身的环境差异",
                "action": None}
 
-    # ④ 转而不学：有决策却长期没有新经验
+    # ④ 业务闭环必须真的在转 —— canary 绿不代表业务闭环在跑。
+    #    canary 只证明「Harness 这套机器还活着」，它每天都会 promoted；
+    #    如果只看整体有没有决策，业务闭环停了一个月也看不出来。
+    #    所以按闭环名分别查（2026-09-07 接入 gooday-assets 时补的）。
+    for name in ec.get("business_loops", ["gooday-assets"]):
+        hits = [d for _, d in recent if d.get("loop") == name]
+        if not hits:
+            yield {"level": "P2", "what": f"业务闭环 {name} 近期没有任何决策",
+                   "why": f"最近 20 条决策里没有 {name} 的。canary 照常 promoted "
+                          "会让整体看起来很正常——但业务闭环可能已经停了",
+                   "fix": f"手动跑 python3 workflows/evolve/run.py 看 {name} 报什么",
+                   "action": None}
+
+    # ⑤ 转而不学：有决策却长期没有新经验
     em, est = _newest(exp_dir)
     if est == "ok" and mt:
         if (mt - em) / 3600 > 48:

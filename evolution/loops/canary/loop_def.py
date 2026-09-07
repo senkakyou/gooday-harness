@@ -21,8 +21,19 @@ import json
 import os
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__)))))
+def _repo_root(start):
+    """向上找 AGENTS.md 认仓库根（别数 dirname 层数，挪个位置就算错）。"""
+    d = start
+    while True:
+        if os.path.exists(os.path.join(d, "AGENTS.md")):
+            return d
+        p = os.path.dirname(d)
+        if p == d:
+            return start
+        d = p
+
+
+REPO = _repo_root(os.path.dirname(os.path.abspath(__file__)))
 EXAMPLE = os.path.join(REPO, "examples", "hello-harness")
 
 for p in (os.path.join(REPO, "packages", "evolve"), EXAMPLE):
