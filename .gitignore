@@ -61,3 +61,6 @@ obj/
 .vscode/
 .idea/
 *.swp
+
+# 巡检目标配置：各机器不同，从 config.example.json 拷
+workflows/*/config.json
