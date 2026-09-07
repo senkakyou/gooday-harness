@@ -21,10 +21,13 @@
 `variant()` 把运行库**复制一份到临时文件**，patch 只作用在副本上。
 拿生产当实验场，是这套东西最不该犯的错。
 """
+import glob
 import json
 import os
 import subprocess
 import tempfile
+import time
+import weakref
 
 # 生产库与媒体根。媒体根是容器 /app/wwwroot 的绑定挂载源。
 DB = os.environ.get("GOODAY_DB",
@@ -103,6 +106,7 @@ class GoodayAssets:
         【绝不改真身】。变体构造失败时上层会中止本轮，
         不会退化成「那就直接在生产上试试」。
         """
+        self._sweep_stale()              # 进程被 SIGKILL 时 finalize 也跑不了
         fd, tmp = tempfile.mkstemp(prefix="gooday-assets-variant-", suffix=".db")
         os.close(fd)
         os.unlink(tmp)                   # sqlite 要自己建
@@ -123,8 +127,9 @@ class GoodayAssets:
         if b.returncode != 0:
             raise RuntimeError(f"重建变体库失败: {(b.stderr or '').strip()[:200]}")
 
-        # 【0600】：默认 umask 会落成 0644，而这是生产 Tools 全表的副本，
-        # 留在 /tmp 全机可读。它是实验用的临时数据，不该被别人看见。
+        # 【0600】：mkstemp 本来就是 0600，但我们 unlink 后让 sqlite 自己建，
+        # 于是按 umask 落回 0644 —— 而这是生产 Tools 全表的副本，
+        # 留在 /tmp 全机可读（灵犀指出了这个来龙去脉）。重建完立刻收回权限。
         try:
             os.chmod(tmp, 0o600)
         except OSError:
@@ -132,6 +137,10 @@ class GoodayAssets:
 
         v = GoodayAssets(db=tmp, media=self.media, sudo=False)
         v._tmp = tmp
+        # 【weakref.finalize 而不是 __del__】：GC 和解释器退出都能兜住，
+        # 且不会因为对象参与循环引用而被跳过。引擎不调 cleanup()——
+        # 它不该知道某条闭环的变体是文件还是别的什么，那是 Subject 自己的事。
+        v._fin = weakref.finalize(v, GoodayAssets._unlink_quiet, tmp)
         v._apply(tmp, patch, sudo=False)
         return v
 
@@ -182,28 +191,42 @@ class GoodayAssets:
                 "回滚会不完整。请让 checkpoint() 与本函数都从 ALLOWED_FIELDS 派生")
 
         want = set(self._touched or [])
-        restored = []
+        restored, problems = [], []
         for row in ckpt.get("rows", []):
             tid = row.get("Id")
             if want and tid not in want:
                 continue                     # 不是本轮动过的，不碰
             sets = ", ".join(f"{f}=?" for f in fields)
-            self._exec(self.db, f"UPDATE Tools SET {sets} WHERE Id=?;",
-                       tuple(row.get(f) for f in fields) + (tid,), sudo=self.sudo)
+            try:
+                n = self._exec(self.db, f"UPDATE Tools SET {sets} WHERE Id=?;",
+                               tuple(row.get(f) for f in fields) + (tid,),
+                               sudo=self.sudo, expect_changes=False)
+            except Exception as e:
+                problems.append(f"Id={tid} 回滚写入失败: {e}")
+                continue                     # 【继续滚剩下的】
+            if n == 0:
+                problems.append(f"Id={tid} 已不存在，无法回滚（checkpoint 之后被删）")
+                continue
             restored.append((tid, row))
 
-        # 回读校验：写回去的是不是真的等于 checkpoint
+        # 回读校验：写回去的是不是真的等于 checkpoint。
+        # 不校验的话，回滚失败和回滚成功长得一模一样。
         for tid, row in restored:
             cur = _sql(self.db,
                        f"SELECT {','.join(fields)} FROM Tools WHERE Id={int(tid)};",
                        self.sudo)
             if not cur:
-                raise RuntimeError(f"回滚校验失败：Id={tid} 查不到")
+                problems.append(f"Id={tid} 回读不到")
+                continue
             for f in fields:
                 if cur[0].get(f) != row.get(f):
-                    raise RuntimeError(
-                        f"回滚校验失败：Id={tid} 的 {f} 期望 {row.get(f)!r}，"
-                        f"实际 {cur[0].get(f)!r}")
+                    problems.append(
+                        f"Id={tid} 的 {f} 期望 {row.get(f)!r} 实际 {cur[0].get(f)!r}")
+
+        # 【先把能滚的都滚完，再报问题】——顺序不能反
+        if problems:
+            raise RuntimeError("回滚未完全成功（其余行已尽力复原）："
+                               + "；".join(problems[:5]))
 
 
     # ── 内部 ────────────────────────────────────────────────
@@ -244,7 +267,7 @@ class GoodayAssets:
         return "'" + str(a).replace("'", "''") + "'"
 
     @classmethod
-    def _exec(cls, db, sql, args, sudo):
+    def _exec(cls, db, sql, args, sudo, expect_changes=True):
         """执行写操作。
 
         ⚠️ 占位符必须【一次性切分拼接】，不能 `for a in args: q.replace("?", v, 1)`。
@@ -264,36 +287,56 @@ class GoodayAssets:
             q += cls._quote(a) + tail
         # 【要求真的改到了行】。`UPDATE ... WHERE Id=999` 匹配 0 行时
         # sqlite 返回 0（成功），于是「工具已被删除」会被记成一次成功的 promote，
-        # 而 Decision 里写着 promoted、实际什么也没发生（灵犀评审指出）。
-        # 加一句 changes() 让它说话。
+        # 而 Decision 里写着 promoted、实际什么也没发生。
+        # （SQLite 的 changes() 计「匹配到的行」，把字段更新成原值也算 1，
+        #   所以 0 行只可能是 Id 真不存在——干净信号，没有误报。）
+        #
+        # ⚠️ 但**不能无条件抛**：rollback 也走这里。某行在 checkpoint 之后
+        # 被人删了，抛异常会把【后面几行的回滚一起打断】——第一版就是这样，
+        # 实测 Id=2 被删导致 Id=3 停在改动后的值上。回滚是补救手段，
+        # 它必须尽力做完，不能因为一行没了就整体作废。
+        # 所以 promote 路径 expect_changes=True（抛错），
+        # rollback 路径 False（返回 0，由调用方收集告警继续走）。
         q_with_check = q.rstrip().rstrip(";") + "; SELECT changes();"
         cmd = (["sudo", "-n"] if sudo else []) + ["sqlite3", db, q_with_check]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             raise RuntimeError(f"写库失败: {(r.stderr or '').strip()[:200]}")
-        changed = (r.stdout or "").strip().splitlines()
-        if changed and changed[-1].strip() == "0":
+        lines = (r.stdout or "").strip().splitlines()
+        n = int(lines[-1].strip()) if lines and lines[-1].strip().isdigit() else -1
+        if expect_changes and n == 0:
             raise RuntimeError(
                 f"写库匹配 0 行 —— 目标可能已被删除。语句: {q[:120]}")
+        return n
+
+    @staticmethod
+    def _unlink_quiet(path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
     def cleanup(self):
-        if self._tmp and os.path.exists(self._tmp):
+        """显式清理。finalize 已经兜底，这里让调用方能主动收回。"""
+        fin = getattr(self, "_fin", None)
+        if fin is not None:
+            fin()                         # finalize 是幂等的
+        elif self._tmp:
+            self._unlink_quiet(self._tmp)
+        self._tmp = None
+
+    @staticmethod
+    def _sweep_stale(hours=6):
+        """扫掉超过 N 小时的遗留变体库。
+
+        finalize 兜住了正常路径，但进程被 SIGKILL 时什么都不会跑。
+        **在 variant() 开头扫**，不在 run()/gate 里扫——那时变体还在用。
+        """
+        cutoff = time.time() - hours * 3600
+        for f in glob.glob(os.path.join(tempfile.gettempdir(),
+                                        "gooday-assets-variant-*.db")):
             try:
-                os.unlink(self._tmp)
+                if os.path.getmtime(f) < cutoff:
+                    os.unlink(f)
             except OSError:
                 pass
-            self._tmp = None
-
-    def __del__(self):
-        """兜底清理临时库。
-
-        引擎（packages/evolve/loop.py）不调 `variant.cleanup()` —— 它不该知道
-        某条闭环的变体是个文件还是别的什么，那是 Subject 自己的事。
-        与其为一条闭环去改冻结的公共引擎，不如在这里自己兜住：
-        **谁分配谁释放**。不这样的话每轮在 /tmp 留一份全表副本，
-        跑上几个月就是一地垃圾（灵犀评审指出）。
-        """
-        try:
-            self.cleanup()
-        except Exception:
-            pass                          # 析构里不许抛，抛了会污染解释器退出

@@ -300,6 +300,47 @@ try:
 except RuntimeError as e:
     check("UPDATE 匹配 0 行 → 报错（不许记成 promoted）", "0 行" in str(e), str(e)[:60])
 
+# ⑫ 灵犀第二轮：rollback 不能因一行失败就整体作废 + -json 的行为变化
+sub2 = S()
+ck3 = sub2.checkpoint()
+sub2.promote([{"id": 1, "field": "DownloadFileName", "value": "c1.html"},
+              {"id": 2, "field": "DownloadFileName", "value": "c2.html"}])
+subprocess.run(["sqlite3", DB, "DELETE FROM Tools WHERE Id=1;"], capture_output=True)
+try:
+    sub2.rollback(ck3)
+    reported = ""
+except RuntimeError as e:
+    reported = str(e)
+r2 = subprocess.run(["sqlite3", DB, "SELECT DownloadFileName FROM Tools WHERE Id=2;"],
+                    capture_output=True, text=True).stdout.strip()
+check("一行被删不打断其余回滚（回滚必须尽力做完）",
+      r2 == "twin_20260429062048.html", r2)
+check("回滚未完全成功时如实报告，不静默", "已不存在" in reported, reported[:60])
+subprocess.run(["sqlite3", DB, """INSERT INTO Tools VALUES
+  (1,'好工具','a','','系统','x',1,'/uploads/ok.html',1,'ok.html',1,0,'');"""],
+    capture_output=True)
+
+# -json 换过来引入的两处行为变化（灵犀预测的，验证确实挡住了）
+from subject import _sql
+check("空结果集返回 [] 而不是炸在 json.loads('')",
+      _sql(DB, "SELECT * FROM Tools WHERE Id=-1;", sudo=False) == [])
+subprocess.run(["sqlite3", DB, """INSERT INTO Tools VALUES
+  (30,'全 NULL','n',NULL,'系统','x',1,NULL,1,NULL,1,0,NULL);"""], capture_output=True)
+try:
+    n_items = [r for r in S().run(None) if r["id"] == 30]
+    check("NULL 字段（-json 给 None）不触发 startswith 崩溃", n_items == [], n_items)
+except Exception as e:
+    check("NULL 字段（-json 给 None）不触发 startswith 崩溃", False, f"{type(e).__name__}: {e}")
+subprocess.run(["sqlite3", DB, "DELETE FROM Tools WHERE Id=30;"], capture_output=True)
+
+# 陈旧变体库清扫（进程被 SIGKILL 时 finalize 也跑不了）
+import tempfile as _tf
+stale = os.path.join(_tf.gettempdir(), "gooday-assets-variant-STALE_TEST.db")
+open(stale, "w").write("x")
+os.utime(stale, (time.time() - 7 * 3600, time.time() - 7 * 3600))
+S().variant({"id": 1, "field": "DownloadFileName", "value": "ok.html"}).cleanup()
+check("variant() 开头清掉超过 6 小时的遗留变体库", not os.path.exists(stale))
+
 # ⑦ 端到端：真的能收敛
 subject = S()
 scores = []
