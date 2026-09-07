@@ -39,12 +39,11 @@ GENERATED = re.compile(r"^ops/cron/|^ops/systemd/")
 
 
 def check(ctx):
-    if not ctx.git_available():
-        # 【不许静默放行】：git 用不了 ≠ 没有问题。以 root 跑时的 dubious ownership
-        # 会让本规则扫 0 个文件却显示通过——门禁在最该起作用的时刻（部署）失灵。
-        yield ("ERROR", f"git 不可用，本规则无法检查：{ctx.git_error() or '未知原因'}",
-               "若是 dubious ownership，跑 "
-               "git config --global --add safe.directory <仓库路径> 后重试")
+    go, level, why = ctx.git_verdict()
+    if not go:
+        # 四态裁决：no_repo→SKIP（本来就没版本库），
+        # no_git/failed→ERROR（检查本该跑却没跑成，绝不能当成没问题）
+        yield (level, why, "")
         return
     tracked = ctx.tracked()
     if not tracked:

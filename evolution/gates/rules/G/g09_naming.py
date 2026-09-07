@@ -43,9 +43,11 @@ EXEMPT = {"README.md", "_template.md", ".gitkeep", "__init__.py"}
 
 
 def check(ctx):
-    if not ctx.git_available():
-        yield ("ERROR", f"git 不可用，命名检查无法进行：{ctx.git_error() or '未知'}",
-               "命名靠 git 跟踪列表判定，git 用不了时不能假装通过")
+    go, level, why = ctx.git_verdict()
+    if not go:
+        # 四态裁决：no_repo→SKIP（本来就没版本库），
+        # no_git/failed→ERROR（检查本该跑却没跑成，绝不能当成没问题）
+        yield (level, why, "")
         return
     tracked = ctx.tracked()
 

@@ -88,9 +88,13 @@ class Ctx:
         except ValueError:
             return p
 
-    # git 是否可用。None=还没试过；True/False=试过的结果；字符串=失败原因
-    _git_ok = None
+    # git 状态：四态严格区分。塌缩成布尔值时，规则只能一律报「git 不可用」，
+    # 而这四种情况的处理方式完全不同——尤其 ③ 是危险的那种：
+    # 检查【本该跑却没跑成】，而不是「这里本来就没东西可查」。
+    _git_state = None          # None=未探测 | ok | no_repo | no_git | failed
     _git_err = ""
+
+    GIT_OK, GIT_NO_REPO, GIT_NO_BIN, GIT_FAILED = "ok", "no_repo", "no_git", "failed"
 
     def git(self, *args):
         try:
@@ -100,27 +104,59 @@ class Ctx:
                 return r.stdout
             Ctx._git_err = (r.stderr or "").strip()[:200]
             return ""
+        except FileNotFoundError as e:
+            Ctx._git_err = f"git 命令不存在: {e}"
+            Ctx._git_state = Ctx.GIT_NO_BIN
+            return ""
         except Exception as e:
             Ctx._git_err = f"{type(e).__name__}: {e}"
+            Ctx._git_state = Ctx.GIT_FAILED
             return ""
 
+    def git_state(self):
+        """返回四态之一。规则据此决定报 SKIP 还是 ERROR——
+        「这里没东西查」和「查不成」必须分开。"""
+        if Ctx._git_state is not None and Ctx._git_state != Ctx.GIT_OK:
+            return Ctx._git_state
+        if Ctx._git_state == Ctx.GIT_OK:
+            return Ctx._git_state
+
+        out = self.git("rev-parse", "--git-dir")
+        if out.strip():
+            Ctx._git_state = Ctx.GIT_OK
+        elif Ctx._git_state in (Ctx.GIT_NO_BIN, Ctx.GIT_FAILED):
+            pass                       # git() 已经判定了
+        elif "not a git repository" in Ctx._git_err.lower():
+            Ctx._git_state = Ctx.GIT_NO_REPO
+        else:
+            # 【危险的那一类】：dubious ownership、权限不足、超时……
+            # 检查本该跑却没跑成，绝不能当成「没问题」
+            Ctx._git_state = Ctx.GIT_FAILED
+        return Ctx._git_state
+
     def git_available(self):
-        """git 能不能用——【不能把"用不了"和"没有东西"混为一谈】。
-
-        2026-09-07 复核实测：以 root 跑本仓库时 git 报 dubious ownership，
-        原来的实现把任何 git 失败都吞成空字符串，于是 G01/G03 打印
-        「不是 git 仓库，跳过」然后放行——门禁全绿，实际一条都没查。
-        而部署入口正是 `sudo bash install.sh`，这恰恰是最需要检查的时刻。
-
-        这正是 policies G01/G05 自己写下的教训（对某种失败形态静默跳过，
-        看起来一切正常）。门禁不能犯它自己记录的错。
-        """
-        if Ctx._git_ok is None:
-            Ctx._git_ok = bool(self.git("rev-parse", "--git-dir").strip())
-        return Ctx._git_ok
+        return self.git_state() == Ctx.GIT_OK
 
     def git_error(self):
         return Ctx._git_err
+
+    def git_verdict(self):
+        """给规则用的统一裁决：(要不要继续, level, 说明)。
+
+        no_repo → SKIP：这里本来就没有版本库，没东西可查，是合理状态。
+        no_git / failed → ERROR：检查【本该跑却没跑成】。
+        把后两者也当 SKIP，就是「检查失败却放行」——本项目最痛恨的形态。
+        """
+        st = self.git_state()
+        if st == Ctx.GIT_OK:
+            return True, None, ""
+        if st == Ctx.GIT_NO_REPO:
+            return False, "SKIP", "不是 git 仓库，本规则无从检查（这里本来就没有版本库）"
+        if st == Ctx.GIT_NO_BIN:
+            return False, "ERROR", f"git 命令不存在，检查【没跑成】：{self.git_error()}"
+        return False, "ERROR", (f"git 执行失败，检查【本该跑却没跑成】：{self.git_error()}。"
+                                f"若是 dubious ownership，跑 "
+                                f"git config --global --add safe.directory {self.root}")
 
     def tracked(self):
         """git 跟踪的文件列表。

@@ -26,8 +26,11 @@ HOLLOW = re.compile(r"^(应该没问题|没问题|已验证|测试通过)[。.!]
 
 
 def check(ctx):
-    if not ctx.git_available():
-        yield ("SKIP", "git 不可用，无法检查提交记录", "")
+    go, level, why = ctx.git_verdict()
+    if not go:
+        # 四态裁决：no_repo→SKIP（本来就没版本库），
+        # no_git/failed→ERROR（检查本该跑却没跑成，绝不能当成没问题）
+        yield (level, why, "")
         return
     log = ctx.git("log", f"-{N}", "--format=%H%x01%s%x02%b%x03")
     if not log.strip():
