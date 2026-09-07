@@ -116,5 +116,59 @@
     "max_unread_minutes": 15,
     "dup_window_minutes": 10,
     "dup_limit": 3
+  },
+  "stale_process": {
+    "_": "进程比代码旧 = 改了没重启。grace 给刚改完还没重启留余量",
+    "grace_minutes": 10,
+    "units": [
+      {
+        "unit": "gooday-harness-bot-lingxi",
+        "deps": [
+          "packages/botkit",
+          "services/bot-lingxi"
+        ]
+      },
+      {
+        "unit": "gooday-harness-bot-ruyi",
+        "deps": [
+          "packages/botkit",
+          "services/bot-ruyi"
+        ]
+      },
+      {
+        "unit": "gooday-harness-bot-qingtianzu",
+        "deps": [
+          "packages/botkit",
+          "services/bot-qingtianzu"
+        ]
+      },
+      {
+        "unit": "gooday-harness-bot-weizhentian",
+        "deps": [
+          "packages/botkit",
+          "services/bot-weizhentian"
+        ]
+      },
+      {
+        "unit": "gooday-harness-bot-zhaocai",
+        "deps": [
+          "packages/botkit",
+          "services/bot-zhaocai"
+        ]
+      },
+      {
+        "unit": "gooday-harness-dispatcher",
+        "deps": [
+          "packages/botkit",
+          "services/dispatcher"
+        ]
+      },
+      {
+        "unit": "gooday-harness-ocr",
+        "deps": [
+          "services/ocr"
+        ]
+      }
+    ]
   }
 }
