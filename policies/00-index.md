@@ -148,6 +148,11 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 | **Decision** 决定改什么、谁批的 | `docs/decisions/`（**进版本库**） |
 | **Checkpoint** 改之前的可回滚点 | `/var/lib/gooday-harness/checkpoints/` |
 
+**结构齐全 ≠ 证据存在。** G07 还做运行期实证：`tasks/`、`events/` 为空，
+或超过 7 天没有新记录，或存在 `.trace-failure` 标记，一律 ERROR——
+只查「有没有放证据的地方」是不够的，那正是凭据失效三周无人发现的形状。
+写入方是 `packages/trace`（零依赖）。
+
 配套：每个实验必须关联一个 Decision 并写明回滚点；
 每个评价器必须说明 Evidence 来源——没有证据的评价是拍脑袋，
 用它驱动改进只会放大噪音。

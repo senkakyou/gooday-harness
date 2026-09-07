@@ -13,12 +13,17 @@
 """
 import os
 import re
+import time
 
 RULE = "G07"
 TITLE = "自动改动可追溯"
 
 # 运行期留痕目录（在仓库外，由 ops/install.sh 创建）
 RUNTIME_DIRS = ("tasks", "events", "evidence", "evaluations", "checkpoints")
+
+# 证据链多久没动就算断了。7 天：比任何一条产线的周期都长，
+# 又短到能在下次月报前发现（凭据那次拖了三周）。
+STALE_DAYS = 7
 
 
 def _expand_braces(text):
@@ -71,7 +76,27 @@ def check(ctx):
             yield ("ERROR", f"{rel} 没写回滚点",
                    "实验必须能退回去。没演练过的回滚方案等于没有")
 
-    # 4) 每个评价器必须说明 Evidence 来源
+    # 4) 必须有写 Task/Event 的库——没有写入方，前面那些目录只是空壳
+    if not ctx.exists("packages/trace", "trace.py"):
+        yield ("ERROR", "packages/trace 不存在，没有任何东西会写 Task/Event",
+               "G07 会退化成「检查有没有放证据的地方」而不是「有没有证据」")
+
+    # 5) 运行期实证：证据链是不是真的在流动
+    #
+    # 【这条是本规则的灵魂】。前面几项查的都是结构；结构齐全但没人写时，
+    # 系统看起来一切正常而实际什么都没记——凭据失效三周无人发现就是这个形状。
+    # CI 里没有这些目录，SKIP 掉，由服务器上的巡检覆盖。
+    #
+    # ⚠️ 这里【不能 return】：第 6 项与运行期无关，
+    # 守卫 return 会连带跳过它——本规则和 G12 都栽过这一下。
+    state = os.environ.get("GOODAY_HARNESS_STATE", "/var/lib/gooday-harness")
+    if not os.path.isdir(state):
+        yield ("SKIP", f"运行期目录不存在（{state}），证据链实证未生效",
+               "部署后由服务器上的巡检覆盖此项")
+    else:
+        yield from _check_runtime(state)
+
+    # 6) 每个评价器必须说明 Evidence 来源
     for name in ctx.subdirs("evolution/evaluators"):
         if name.startswith("_"):
             continue
@@ -80,3 +105,25 @@ def check(ctx):
         if body and not re.search(r"Evidence|证据", body, re.I):
             yield ("ERROR", f"{rel} 未说明 Evidence 来源",
                    "没有证据的评价是拍脑袋，用它驱动改进只会放大噪音")
+
+
+def _check_runtime(state):
+    """证据链是不是真的在流动。只在运行期目录存在时调用。"""
+    mark = os.path.join(state, ".trace-failure")
+    if os.path.exists(mark) and os.path.getsize(mark) > 0:
+        yield ("ERROR", "存在 .trace-failure 标记：追踪写入链已断",
+               f"看 {mark}。追踪断掉时系统看起来一切正常，是最危险的状态")
+
+    now = time.time()
+    for sub, what in (("tasks", "Task"), ("events", "Event")):
+        d = os.path.join(state, sub)
+        files = [os.path.join(d, f) for f in os.listdir(d)] if os.path.isdir(d) else []
+        files = [f for f in files if os.path.isfile(f)]
+        if not files:
+            yield ("ERROR", f"{what} 目录是空的：{d}",
+                   "目录建好了但没人往里写，证据链等于不存在。用 packages/trace")
+            continue
+        age_d = (now - max(os.path.getmtime(f) for f in files)) / 86400
+        if age_d > STALE_DAYS:
+            yield ("ERROR", f"{what} 已 {age_d:.1f} 天没有新记录（阈值 {STALE_DAYS} 天）",
+                   "要么系统真的什么都没干，要么写入链断了——两种都要查")

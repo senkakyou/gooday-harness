@@ -89,4 +89,4 @@ sudo bash ops/install.sh                  # 装上——不需要改这个脚本
 
 ## 许可
 
-待定（MIT / Apache-2.0 未决，见 `docs/specs/001`）。
+MIT，见 [LICENSE](LICENSE)。
