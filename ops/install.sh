@@ -103,6 +103,15 @@ for dir in "$REPO"/workflows/*/; do
     [[ "$name" == _* ]] && continue
     sched="$dir/deploy/schedule.cron"
     [[ -f "$sched" ]] || continue
+    # 缺 config.json 就从 example 播种。
+    # 不做这一步，install 会报告成功而部署出来的 workflow 一跑就退出——
+    # 「装完了」不等于「能跑」（policies G08）。
+    # ⚠️ 这段曾在重写 runas 逻辑时被连带删掉（2026-09-07），
+    #    导致三个 workflow 装上了却没 config，一跑就退，而 install 全绿。
+    if [[ -f "$dir/config.example.json" && ! -f "$dir/config.json" ]]; then
+        cp "$dir/config.example.json" "$dir/config.json"
+        echo "    ℹ️  $name：已播种 config.json，记得按本机改"
+    fi
     who="$(grep -oP '(?<=^# runas:)\s*\S+' "$sched" | tr -d ' ' | head -1)"
     who="${who:-root}"
     body="$(grep -v '^\s*#' "$sched" | grep -v '^\s*$' | sed "s/{{NAME}}/$name/g")"

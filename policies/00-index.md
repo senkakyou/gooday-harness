@@ -155,6 +155,18 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 
 设计见 `docs/specs/004-secrets-and-config.md`。
 
+### G19 配置必须被播种 `[可检查]`
+
+有 `config.example.json` 的 workflow，`ops/install.sh` 必须负责让 `config.json` 存在；
+而 `config.json` 本身不得进版本库（各机器不同）。
+
+> 教训：install.sh 本有播种逻辑，重写 crontab 的 runas 分组时**被连带删掉**。
+> 结果三个 workflow 装上了却没 config，一跑就退——而 install 全绿、cron 装上了、
+> 日志里只有一行没人看的「缺 config.json」。备份因此停了几小时，
+> 直到 patrol 的 config_drift 项才抓出来。
+>
+> 「装完了」不等于「能跑」，与 G08 同族。
+
 ### G05 规范必须可执行（元规范）`[可检查]`
 
 `policies/` 每条 `[可检查]` 条目在 `evolution/gates/rules/` 有实现；反向亦然。
