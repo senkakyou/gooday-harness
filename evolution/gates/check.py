@@ -216,6 +216,13 @@ def main():
             for lvl, msg, hint in mod:
                 results.append((lvl, title, msg, hint))
             continue
+        if rule in implemented:
+            # 编号是引用锚点：两条规则共用一个 ID 时，报告里会出现两条同号
+            # 且看不出是谁，规范总表也无从对应。2026-09-07 真撞过一次
+            # （新写的门禁规则误用了已被占用的 G11）。
+            results.append(("ERROR", rule,
+                            f"编号重复：{rule} 被多个规则文件使用",
+                            "编号只增不复用（旧号是引用锚点），改用下一个空号"))
         implemented.add(rule)
         try:
             for item in (mod.check(ctx) or []):

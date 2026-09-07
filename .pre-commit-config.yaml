@@ -1,0 +1,42 @@
+# 本地提交前门禁。
+#
+#   pip install pre-commit && pre-commit install
+#
+# 分工（见 policies「什么该外包」）：
+#   本地这层只放【快且轻】的——本机 2G 内存，重型工具会让人受不了而关掉它。
+#   Semgrep / TruffleHog 这类放 CI，别放这里。
+
+repos:
+  # ── 通用检查：外包给成熟工具，不自己造轮子 ──
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks          # 密钥泄露。手写正则会把「检测器自己的正则」当命中，本项目踩过
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ['--maxkb=1024']   # G01 五类分离的第一道防线：媒体/数据库别进版本库
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-json
+
+  # ── 项目专属检查：现成工具不可能知道的那些 ──
+  - repo: local
+    hooks:
+      - id: gates
+        name: 规范门禁 (evolution/gates)
+        entry: python3 evolution/gates/check.py .
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: trace-test
+        name: trace 自测
+        entry: python3 packages/trace/test_trace.py
+        language: system
+        pass_filenames: false
+        files: '^packages/trace/'

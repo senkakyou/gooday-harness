@@ -1,0 +1,56 @@
+# 质量门禁 CI
+#
+# 没有这个文件，整套规范就退回到「靠人记得跑」——
+# 那正是本项目要消灭的形态（规范写了但不会自动生效）。
+# policies G17 会检查本文件存在且真的调用了 check.py。
+
+name: gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # 规则要读 git 跟踪列表，浅克隆会让 G01/G03/G09 失真
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 规则里的运行期实证（G07 的证据链检查）在 CI 里没有 /var/lib，
+      # 会 SKIP——这是设计如此，那部分由服务器上的巡检覆盖。
+      - name: 规范检查
+        run: python3 evolution/gates/check.py .
+
+      - name: trace 自测
+        run: python3 packages/trace/test_trace.py
+
+      - name: 安装脚本语法
+        run: bash -n ops/install.sh
+
+      - name: 报告留档
+        if: always()
+        run: python3 evolution/gates/check.py . --json > gates-report.json || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gates-report
+          path: gates-report.json
+
+# ─────────────────────────────────────────────────────────────────
+# CI 盖不到的部分，必须在服务器上定期跑（G07 的运行期实证、G16 的进程比
+# 代码新、cron 是否真的执行）。挂进 crontab：
+#
+#   0 8 * * * cd /opt/gooday-harness && python3 evolution/gates/check.py . \
+#     >> /var/log/gooday-harness/gates.log 2>&1
+#
+# 只接 CI 不接服务器 = 恰好漏掉最容易出事的那几项。
+# ─────────────────────────────────────────────────────────────────
