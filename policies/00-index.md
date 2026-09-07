@@ -118,6 +118,28 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 > 同一形态反复出现过：drop-in 装上但脚本没记（重装即丢，全绿）、
 > 凭据失效三周（心跳/systemd/服务列表全绿）、注入条款写文档三个月没进 prompt。
 
+### G09 命名规则 `[可检查]`
+
+命名不统一的代价不是"不好看"，是**工具会骗你**。
+
+| 对象 | 规则 | 例 |
+|---|---|---|
+| 所有路径 | **全 ASCII** | 中文写进内容，不写进文件名 |
+| 扩展点成员目录 | kebab-case 小写 | `bot-lingxi`、`audiobook` |
+| 模板 / 内部件 | `_` 开头 | `_template`、`_shared` |
+| 规则文件 | `<层小写><NN>_snake_case.py` | `g08_deploy_verified.py` |
+| Spec / Decision | `NNN-kebab-case.md` | `003-nginx-isolation.md` |
+| 事故复盘 | `YYYY-MM-DD-kebab-case.md` | `2026-09-07-credential-expiry.md` |
+| 部署文件 | 固定名 | `unit.service`、`schedule.cron` |
+
+> 教训：`git ls-files` / `git diff --name-only` 默认把非 ASCII 文件名转义成
+> `"docs/\345\267\245..."`。拿它和 `find` 的输出做比对时中文名全部对不上，
+> **差点判定「整个 docs 目录丢了」**——实际一个都没丢。
+>
+> 更讽刺的是：G09 第一版被这个现象本身打败了——转义后的字符串是纯 ASCII，
+> 于是「检查文件名是否 ASCII」漏掉了所有中文名。根治是
+> `git -c core.quotepath=false`，已修进 `check.py` 的 `tracked()`。
+
 ### G05 规范必须可执行（元规范）`[可检查]`
 
 `policies/` 每条 `[可检查]` 条目在 `evolution/gates/rules/` 有实现；反向亦然。

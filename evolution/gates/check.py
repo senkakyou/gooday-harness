@@ -123,7 +123,16 @@ class Ctx:
         return Ctx._git_err
 
     def tracked(self):
-        return [l for l in self.git("ls-files").splitlines() if l]
+        """git 跟踪的文件列表。
+
+        ⚠️ 必须 `-c core.quotepath=false`。默认情况下 git 会把非 ASCII 文件名
+        转义成 `"docs/\\345\\267\\245..."`——**转义后的字符串本身是纯 ASCII**，
+        于是「检查文件名是不是 ASCII」这条规则会被它要防的现象打败，
+        中文文件名全部漏检。2026-09-07 实测踩到，两次：
+        第一次是拿它和 find 输出做 comm 比对，差点判定「整个 docs 目录丢了」。
+        """
+        return [l for l in self.git("-c", "core.quotepath=false",
+                                    "ls-files").splitlines() if l]
 
     def subdirs(self, under):
         base = self.path(under)

@@ -143,7 +143,7 @@ else
         echo "    ⚠️ 配置已写入，但【没有任何 nginx 在读这个目录】——当前不生效。"
         echo "       这台机器上 nginx 跑在容器里，宿主机没装。"
         echo "       迁移期这是预期状态：旧系统的 gooday_nginx 仍独占 80/443。"
-        echo "       切换时才把本目录挂进 nginx 容器，见 docs/specs/002 缺口三。"
+        echo "       切换时才把本目录挂进 nginx 容器，见 docs/specs/002-known-gaps.md 缺口三。"
     fi
 fi
 

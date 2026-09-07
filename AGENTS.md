@@ -100,7 +100,7 @@ python3 evolution/gates/check.py .     # 动手前看基线，别在红着的地
 
 第二层循环（`evolution/`）将开源为**可挂在任何执行层之上的自我迭代层**——
 不自己实现 Runtime，不绑定框架。Gooday 是它的第一个真实用户，不是"示例"。
-方向已定、未启动，详见 `docs/specs/001-*.md`。
+方向已定、未启动，详见 `docs/specs/001-open-source-skeleton.md`。
 **写规范时假设外人会读到**——别把业务细节焊进条文。
 
 ## 事故了怎么办

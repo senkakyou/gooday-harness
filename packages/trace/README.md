@@ -4,7 +4,7 @@ policies **G07 要求任何自动行为留下六样痕**。本库负责其中三
 另外三样由 `evolution/evaluators/`（Evidence、Evaluation）和人（Decision）写。
 
 没有它，第二层循环就只是画在文档里的图——
-`docs/specs/002` 把这条列为**最高优先级缺口**，本包就是补它的。
+`docs/specs/002-known-gaps.md` 把这条列为**最高优先级缺口**，本包就是补它的。
 
 ## 用法
 
