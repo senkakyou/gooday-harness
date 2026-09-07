@@ -1,0 +1,6 @@
+# uploads 运行时由宿主机 bind mount 提供(docker-compose.yml),烘进镜像是3GB死重,
+# 且构建瞬时占双倍磁盘曾把 52G 盘挤爆(2026-07-13)
+wwwroot/uploads/
+bin/
+obj/
+gooday.db

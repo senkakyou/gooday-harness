@@ -1,0 +1,53 @@
+# Gooday Harness 应用栈
+#
+# 与旧 /opt/gooday/docker-compose.yml 的关键差异：
+#
+# 1. 【容器名与项目名带 harness 前缀】——迁移期两套可并存，不抢名字。
+# 2. 【产物走 /srv/gooday-harness/media】而不是挂源码目录里的 wwwroot/uploads。
+#    G01：产物不进版本库、也不该混在代码目录里。
+# 3. 数据库卷【沿用旧卷 gooday_gooday_data】——不是复制一份。
+#    切换的本质是「换个进程读同一份数据」，复制会立刻产生两份真相。
+
+name: gooday-harness
+
+services:
+  api:
+    build:
+      context: ../../services/api/src
+    container_name: gooday-harness-api
+    restart: always
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+    ports:
+      # 迁移期用 8081，旧 app 仍占 8080。切换时改 nginx 上游即可。
+      - "127.0.0.1:8081:8080"
+    volumes:
+      # 数据库：沿用旧卷，不复制
+      - gooday_data:/app/data
+      # 产物：仓库外（G01）
+      - /srv/gooday-harness/media/uploads:/app/wwwroot/uploads
+      - /srv/gooday-harness/media/chat-media:/app/wwwroot/chat-media
+      - /srv/gooday-harness/media/avatars:/app/wwwroot/avatars
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      # 数据库在挂载卷里
+      - ConnectionStrings__Default=Data Source=/app/data/gooday.db
+      # ⚠️ 应用要的是 .NET 配置命名（Jwt__Secret），不是裸的 JWT_SECRET。
+      #    传错名字时它【不会用默认值凑合】，而是直接拒绝启动——
+      #    「生产环境不可使用默认 JWT 密钥」。这是个好设计：
+      #    宁可起不来，也不要用一个人人都知道的密钥在生产跑。
+      - Jwt__Secret=${JWT_SECRET}
+      - Jwt__Issuer=gooday.ltd
+      - Jwt__Audience=gooday.ltd
+      # OCR 服务：迁移期指向 harness 的 7789（旧的 7788 已停）
+      - Vision__ClaudeUrl=${CLAUDE_OCR_URL:-http://172.18.0.1:7789}
+    env_file:
+      - /opt/gooday-harness/.env
+
+volumes:
+  gooday_data:
+    external: true
+    # 沿用旧栈创建的卷。external 表示「这个卷不归我管，我只是用它」——
+    # 这样 docker compose down 不会误删它。
+    name: gooday_gooday_data

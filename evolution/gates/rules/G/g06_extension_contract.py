@@ -18,8 +18,12 @@ RULE = "G06"
 TITLE = "扩展点契约"
 
 # 扩展点 -> 每个成员必须有的东西
+# services/ 有两种成员，判据不同——这是迁入应用容器时才暴露的盲区：
+#   systemd 服务 → 要 deploy/unit.service
+#   容器服务     → 要 deploy/compose 引用（由 ops/docker/ 统一编排）
+# 原来只认第一种，把容器服务判成「缺 unit.service」。
 POINTS = {
-    "services":                ["README.md", "deploy/unit.service"],
+    "services":                ["README.md"],
     "workflows":               ["README.md", "deploy/schedule.cron"],
     "packages":                ["README.md"],
     # 第二层循环的两个扩展点：评价器与实验
@@ -53,6 +57,17 @@ def check(ctx):
                 if not ctx.exists(point, name, *r.split("/")):
                     yield ("ERROR", f"{point}/{name}/ 缺 {r}",
                            f"照 {point}/_template/ 补齐；缺了它装不上或没人知道它算不算成功")
+
+            # services 的成员必须【二选一】有明确的部署方式，
+            # 否则它装不上而没人知道
+            if point == "services":
+                has_unit = ctx.exists(point, name, "deploy", "unit.service")
+                in_compose = name in ctx.read("ops/docker/docker-compose.yml")
+                if not has_unit and not in_compose:
+                    yield ("ERROR", f"{point}/{name}/ 既没有 unit.service "
+                                    f"也不在 ops/docker/ 的 compose 里",
+                           "服务必须有明确的部署方式：systemd 单元，"
+                           "或被 compose 编排。两者都没有 = 它永远装不上")
 
     # 3) 反向：部署配置不得散落在扩展点之外
     #    服务的 unit 必须待在自己服务目录里，不能回到全局 ops/

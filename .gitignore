@@ -64,3 +64,8 @@ obj/
 
 # 巡检目标配置：各机器不同，从 config.example.json 拷
 workflows/*/config.json
+
+# 应用源码里的运行期产物（G01）：它们进 /srv/gooday-harness/media/
+services/api/src/wwwroot/uploads/
+services/api/src/wwwroot/chat-media/
+services/api/src/wwwroot/avatars/
