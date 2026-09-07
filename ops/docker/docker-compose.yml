@@ -45,9 +45,43 @@ services:
     env_file:
       - /opt/gooday-harness/.env
 
+  # ---- Nginx 反向代理 ----
+  nginx:
+    image: nginx:alpine
+    container_name: gooday-harness-nginx
+    restart: always
+    # host 网络：绕过 Docker NAT，$$remote_addr 是真实客户端 IP。
+    # 也因此它能用 127.0.0.1:8081 直达 api 容器映射到宿主机的端口。
+    network_mode: host
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+    volumes:
+      - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../nginx/conf.d:/etc/nginx/conf.d:ro
+      - ../nginx/certs:/etc/nginx/certs:ro
+      # 正式证书：沿用旧卷，【不复制】。和数据库同理——
+      # 复制会产生两份，续期时只更新一份，另一份静默过期。
+      - gooday_certs:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+    depends_on:
+      - api
+
+  # ---- Certbot（按需手动运行，不常驻）----
+  certbot:
+    image: certbot/certbot
+    container_name: gooday-harness-certbot
+    profiles: ["tools"]        # 不随 up 启动，需要时 --profile tools 显式拉起
+    volumes:
+      - gooday_certs:/etc/letsencrypt
+      - /var/www/certbot:/var/www/certbot
+
 volumes:
   gooday_data:
     external: true
     # 沿用旧栈创建的卷。external 表示「这个卷不归我管，我只是用它」——
     # 这样 docker compose down 不会误删它。
     name: gooday_gooday_data
+  gooday_certs:
+    external: true
+    name: gooday_gooday_certs

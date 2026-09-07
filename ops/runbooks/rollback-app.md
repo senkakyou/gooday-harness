@@ -41,3 +41,30 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://localhost/
 
 第 4 步的思路值得记住：**验证「切过去了」不能靠看日志或猜，
 要靠「把旧的拿掉，看还行不行」。**
+
+---
+
+## 完整回滚（含 nginx，2026-09-07 后适用）
+
+nginx 也已迁入 harness，回滚要多一步：
+
+```bash
+# 1. 停 harness 栈
+cd /opt/gooday-harness/ops/docker && docker compose stop nginx api
+
+# 2. 起旧栈
+docker compose up -d app nginx
+
+# 3. 改回上游（旧 nginx 读的是 /opt/gooday/nginx/conf.d）
+sed -i 's#127.0.0.1:8081#127.0.0.1:8080#g' /opt/gooday/nginx/conf.d/gooday.conf
+docker exec gooday_nginx nginx -t && docker exec gooday_nginx nginx -s reload
+
+# 4. 验证
+curl -sk -o /dev/null -w '%{http_code}\n' https://localhost/
+```
+
+**前提：`/opt/gooday` 目录还在。** 一旦删除，回滚只能从 GitHub 封存点
+`bcc8d6e` 恢复源码后重建——那要几十分钟而不是几十秒。
+
+**所以建议：新栈稳定运行一周之后再删 `/opt/gooday`。**
+数据库与证书用的是同一批卷，删目录不会丢数据，但会丢掉快速回滚的能力。
