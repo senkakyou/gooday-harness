@@ -49,11 +49,6 @@
       "name": "gooday-harness-hourly",
       "dir": "/srv/gooday-harness/backups/gooday/hourly",
       "max_age_hours": 3
-    },
-    {
-      "name": "gooday-legacy-hourly",
-      "dir": "/opt/gooday/backups/hourly",
-      "max_age_hours": 3
     }
   ],
   "certs": [
@@ -86,7 +81,7 @@
     {
       "name": "gooday",
       "db": "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db",
-      "webroot": "/opt/gooday/src/GoodayTools/wwwroot",
+      "webroot": "/srv/gooday-harness/media",
       "queries": [
         [
           "在线工具",
@@ -96,7 +91,8 @@
           "可下载工具",
           "SELECT Name, '/uploads/'||DownloadFileName FROM Tools WHERE IsPublished=1 AND HasDownload=1 AND COALESCE(DownloadFileName,'')<>''"
         ]
-      ]
+      ],
+      "_webroot": "容器 /app/wwwroot 的 uploads/avatars/chat-media 都绑定到这里"
     }
   ],
   "_assets": "已发布内容的文件还在不在。这类丢失特别危险：页面照常列出来，点进去才 404，后台看起来一切正常。",

@@ -46,12 +46,16 @@ for u in root agent; do
     BAK="/var/lib/gooday-harness/checkpoints/crontab-$u-precutover-$(date +%Y%m%d-%H%M%S).bak"
     mkdir -p "$(dirname "$BAK")"
     crontab -u "$u" -l > "$BAK" 2>/dev/null || true
-    before=$(grep -cE "^[^#].*$OLD/" "$BAK" 2>/dev/null || echo 0)
+    # ⚠️ 不能写 `$(grep -c ... || echo 0)`：grep 找不到时【既打印 0 又退出 1】，
+    #    `|| echo 0` 会再追加一个 0，变量成了 "0\n0"，
+    #    随后 [[ "$before" -eq 0 ]] 直接语法错误，把成功报成警告。
+    #    grep -c 本来就会打印 0，用 || true 兜住退出码即可。
+    before=$(grep -cE "^[^#].*$OLD/" "$BAK" 2>/dev/null || true); before=${before:-0}
     if [[ "$before" -eq 0 ]]; then good "[$u] 没有指向 $OLD 的活跃行"; continue; fi
     TMP=$(mktemp)
     sed -E "s|^([^#].*$OLD/.*)$|# [切换于 $(date +%F) 停用，已迁至 gooday-harness] \1|" "$BAK" > "$TMP"
     crontab -u "$u" "$TMP" && rm -f "$TMP"
-    after=$(crontab -u "$u" -l 2>/dev/null | grep -cE "^[^#].*$OLD/" || echo 0)
+    after=$(crontab -u "$u" -l 2>/dev/null | grep -cE "^[^#].*$OLD/" || true); after=${after:-0}
     [[ "$after" -eq 0 ]] && good "[$u] $before 条已停用（备份 $BAK）" \
                          || bad "[$u] 还剩 $after 条没停掉"
 done
