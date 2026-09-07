@@ -70,44 +70,49 @@ done
 # 做法：用标记划出本项目的托管块，块外的行【原样保留】。
 # 这仍然满足 G03 单一真源——本项目管的那部分只有一个来源，
 # 别人的任务不归我们管，也不该被我们删。
-log "更新 crontab（只动本项目托管块）"
+# 按 runas 分组：有些任务必须以 agent 跑（要用它的模型凭据），
+# 有些必须 root（要重启服务、读 docker 卷）。
+# 盘点旧系统时才发现【存在两个 crontab】——root 11 个、agent 3 个，
+# 而原来的 install.sh 只管 root 那个，agent 侧的任务它完全看不见。
+# 产线在 schedule.cron 里用 `# runas: <用户>` 声明，默认 root。
+log "更新 crontab（按 runas 分组，只动本项目托管块）"
 BEGIN_MARK="# >>> gooday-harness managed block >>>"
 END_MARK="# <<< gooday-harness managed block <<<"
 
-CRON_BAK="/var/lib/gooday-harness/checkpoints/crontab-$(date +%Y%m%d-%H%M%S).bak"
-crontab -l > "$CRON_BAK" 2>/dev/null || true      # 先留回滚点（G07）
-echo "    已备份现有 crontab → $CRON_BAK"
+# 先收集每个 workflow 的 runas
+declare -A CRON_BY_USER
+for dir in "$REPO"/workflows/*/; do
+    name="$(basename "$dir")"
+    [[ "$name" == _* ]] && continue
+    sched="$dir/deploy/schedule.cron"
+    [[ -f "$sched" ]] || continue
+    who="$(grep -oP '(?<=^# runas:)\s*\S+' "$sched" | tr -d ' ' | head -1)"
+    who="${who:-root}"
+    body="$(grep -v '^\s*#' "$sched" | grep -v '^\s*$' | sed "s/{{NAME}}/$name/g")"
+    CRON_BY_USER[$who]+="# ── $name ──"$'\n'"$body"$'\n'
+    install -d -m 755 "/var/lib/gooday-harness/state/$name" \
+                      "/srv/gooday-harness/media/$name"
+done
 
-CRON_TMP="$(mktemp)"
-# 1) 保留托管块【以外】的全部内容
-crontab -l 2>/dev/null | sed "\|^${BEGIN_MARK}\$|,\|^${END_MARK}\$|d" > "$CRON_TMP" || true
-# 2) 追加本项目的托管块
-{
-    echo "$BEGIN_MARK"
-    echo "# 由 ops/install.sh 从 workflows/*/deploy/schedule.cron 汇总，勿手工编辑。"
-    echo "SHELL=/bin/bash"
-    echo "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-    for dir in "$REPO"/workflows/*/; do
-        name="$(basename "$dir")"
-        [[ "$name" == _* ]] && continue
-        sched="$dir/deploy/schedule.cron"
-        [[ -f "$sched" ]] || continue
-        # 缺 config.json 就从 example 播种。
-        # 不做这一步的话，install 会报告成功、而部署出来的东西一跑就退出——
-        # 「装完了」不等于「能跑」（G08）。
-        if [[ -f "$dir/config.example.json" && ! -f "$dir/config.json" ]]; then
-            cp "$dir/config.example.json" "$dir/config.json"
-            echo "    ℹ️  $name：已从 config.example.json 播种 config.json，记得按本机改"
-        fi
-        echo "# ── $name ──"
-        grep -v '^\s*#' "$sched" | grep -v '^\s*$' | sed "s/{{NAME}}/$name/g"
-        install -d -m 755 "/var/lib/gooday-harness/state/$name" \
-                          "/srv/gooday-harness/media/$name"
-    done
-    echo "$END_MARK"
-} >> "$CRON_TMP"
-crontab "$CRON_TMP" && rm -f "$CRON_TMP"
-echo "    托管块已更新，块外任务原样保留"
+for who in "${!CRON_BY_USER[@]}"; do
+    BAK="/var/lib/gooday-harness/checkpoints/crontab-$who-$(date +%Y%m%d-%H%M%S).bak"
+    crontab -u "$who" -l > "$BAK" 2>/dev/null || true
+    echo "    [$who] 已备份 → $BAK"
+
+    TMP="$(mktemp)"
+    crontab -u "$who" -l 2>/dev/null \
+        | sed "\|^${BEGIN_MARK}\$|,\|^${END_MARK}\$|d" > "$TMP" || true
+    {
+        echo "$BEGIN_MARK"
+        echo "# 由 ops/install.sh 汇总，勿手工编辑。改要改 workflows/*/deploy/schedule.cron"
+        echo "SHELL=/bin/bash"
+        echo "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        printf '%s' "${CRON_BY_USER[$who]}"
+        echo "$END_MARK"
+    } >> "$TMP"
+    crontab -u "$who" "$TMP" && rm -f "$TMP"
+    echo "    [$who] 托管块已更新，块外任务原样保留"
+done
 
 # ── 4. ops/nginx/* —— 装进本项目自己的目录，并【验证真的会被读到】 ──────
 #

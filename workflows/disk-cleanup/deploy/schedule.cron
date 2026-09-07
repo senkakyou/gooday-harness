@@ -1,0 +1,4 @@
+# runas: root
+# 每天 19:00 回收磁盘。与旧 disk-cleanup 同点位不冲突：
+# 两者清的是同一批可再生垃圾，先跑的清掉后跑的就没得清，幂等无害。
+0 19 * * * bash -c 'python3 /opt/gooday-harness/workflows/{{NAME}}/run.py' >> /var/log/gooday-harness/{{NAME}}.log 2>&1

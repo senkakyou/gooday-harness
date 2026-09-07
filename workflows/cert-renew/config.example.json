@@ -1,0 +1,15 @@
+{
+  "_readme": "拷贝为 config.json。",
+
+  "renew_cmd": "docker run --rm -v gooday_gooday_certs:/etc/letsencrypt -v /var/www/certbot:/var/www/certbot certbot/certbot renew --quiet",
+  "_renew_cmd": "webroot 验证，不抢 80 口。certbot renew 只在 <30 天时真续，否则空跑。",
+
+  "reload_cmd": "docker exec gooday_nginx nginx -s reload",
+  "_reload_cmd": "graceful reload，无停机；nginx 直读 live 软链。",
+
+  "certs": [
+    { "name": "www.gooday.ltd", "port": 443, "sni": "www.gooday.ltd" }
+  ],
+  "warn_days": 7,
+  "_warn_days": "续完之后实际到期日仍低于此值 = 续期没起作用，报 P0。certbot 空跑也返回 0，只看退出码分不出「续失败」和「还没到该续的时候」。"
+}
