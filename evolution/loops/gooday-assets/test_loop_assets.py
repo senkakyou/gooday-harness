@@ -174,6 +174,60 @@ try:
 except RuntimeError:
     check("占位符数与参数数不符 → 报错", True)
 
+# ⑩ 灵犀评审发现的三个真问题 —— 回归测试
+#    这三个当时 28 项测试全绿却全都漏掉了，因为测试数据太干净。
+
+# ⑩a 名字/描述里有竖线、换行、NULL —— 原来按 `|` 切列，
+#     实测「回滚动作本身把行写坏了」：OnlineUrl 变成 '1'、HasDownload 变成路径
+subprocess.run(["sqlite3", DB, """
+INSERT INTO Tools VALUES (10,'A|B 对比工具','p','desc|带竖线','系统','x',
+  1,'/uploads/ok.html',1,'ok.html',1,0,NULL);
+INSERT INTO Tools VALUES (11,'换行
+的名字','q','d','系统','x',1,'/uploads/ok.html',0,NULL,1,0,NULL);"""],
+    capture_output=True)
+dirty = S()
+items = {(r["id"], r["field"]): r for r in dirty.run(None)}
+check("竖线名被正确解析（不是截断成 'A'）",
+      items.get((10, "OnlineUrl"), {}).get("name") == "A|B 对比工具",
+      items.get((10, "OnlineUrl"), {}).get("name"))
+check("换行名不破坏行解析", (11, "OnlineUrl") in items, sorted(items))
+
+snap = lambda: subprocess.run(["sqlite3", "-json", DB, "SELECT * FROM Tools;"],
+                              capture_output=True, text=True).stdout
+b4 = snap()
+ck2 = dirty.checkpoint()
+dirty.promote({"id": 10, "field": "DownloadFileName", "value": "changed?x.html"})
+dirty.rollback(ck2)
+check("含竖线/换行/NULL 的行也能逐字节复原", snap() == b4,
+      "回滚后与回滚前不一致")
+
+# ⑩b 孪生体不能认领【已被别人引用】的文件 ——
+#     否则 A 的文件丢了会指向 B 的文件，用户下到别人的东西，且毫无信号
+tw = os.path.join(MEDIA, "uploads", "shared.html")
+open(tw, "w").write("shared")
+os.utime(tw, (ts, ts))
+subprocess.run(["sqlite3", DB, f"""
+INSERT INTO Tools VALUES (20,'占用者','r','','系统','x',1,'/uploads/shared.html',0,NULL,1,0,'');
+INSERT INTO Tools VALUES (21,'丢文件的','s','','系统','x',0,NULL,1,
+  'shared_20260429062048.html',1,0,'');"""], capture_output=True)
+res_tw = S().run(None)
+ev_tw = phases.evaluate(res_tw)
+kinds_tw = [e["kind"] for e in phases.learn(ev_tw, res_tw, media=MEDIA)
+            if e.get("item", {}).get("id") == 21]
+check("孪生体已被别人引用 → 不认领（宁可退化成关下载，也不指向别人的文件）",
+      kinds_tw == ["orphan_download"], kinds_tw)
+subprocess.run(["sqlite3", DB, "DELETE FROM Tools WHERE Id IN (10,11,20,21);"],
+               capture_output=True)
+os.unlink(tw)
+
+# ⑩c Gate 第 ④ 条：什么都没干拿不到通过；靠删健康项提分要被拦住
+res0 = S().run(None)
+gate0 = phases.make_gate(res0)
+noop = S().variant({"id": 1, "field": "OnlineUrl", "value": "/uploads/ok.html"})
+gnoop = gate0(noop, None, phases.evaluate(res0)["score"])
+check("什么都没改 → 拒绝（无实质进展）", not gnoop["passed"], gnoop["reasons"])
+noop.cleanup()
+
 # ⑥ Gate 三条判据
 gate = phases.make_gate(res)
 v2 = S().variant({"id": 2, "field": "DownloadFileName", "value": "twin.html"})
@@ -195,6 +249,37 @@ lp = Loop("t", S(), evaluator=phases.evaluate,
           improver=phases.improve, gate=boom_gate, inputs=None)
 o = lp.cycle()
 check("门禁自身崩溃 → 不算通过（fail closed）", not o.ok, o.status)
+
+# ⑨ 回滚的范围与完整性 —— 自查发现的第二组问题
+#    原来 rollback 遍历 checkpoint 全部行逐行 UPDATE：为撤销一行改动
+#    而重写整张表。期间别的进程合法改过别的工具，会被一并抹掉。
+sub = S()
+ck = sub.checkpoint()
+subprocess.run(["sqlite3", DB,
+    "UPDATE Tools SET DownloadFileName='别人改的.html' WHERE Id=3;"],
+    capture_output=True)          # 模拟另一个进程在 checkpoint 之后改了别的工具
+sub.promote({"id": 1, "field": "DownloadFileName", "value": "被闭环改的.html"})
+sub.rollback(ck)
+r1 = subprocess.run(["sqlite3", DB, "SELECT DownloadFileName FROM Tools WHERE Id=1;"],
+                    capture_output=True, text=True).stdout.strip()
+r3 = subprocess.run(["sqlite3", DB, "SELECT DownloadFileName FROM Tools WHERE Id=3;"],
+                    capture_output=True, text=True).stdout.strip()
+check("回滚复原了自己动过的行", r1 == "ok.html", r1)
+check("回滚【不碰】别人改的行（不制造新事故）", r3 == "别人改的.html", r3)
+subprocess.run(["sqlite3", DB, "UPDATE Tools SET DownloadFileName='zip/gone.zip' WHERE Id=3;"],
+               capture_output=True)
+
+# 白名单加了字段却没在 checkpoint 里存 → 回滚会不完整，必须当场炸而不是静默
+class Incomplete(GoodayAssets):
+    ALLOWED_FIELDS = GoodayAssets.ALLOWED_FIELDS | {"IsPublished"}
+try:
+    Incomplete(db=DB, media=MEDIA, sudo=False).rollback(
+        {"rows": [{"Id": 1, "OnlineUrl": "/u", "HasDownload": 1,
+                   "DownloadFileName": "x"}],
+         "fields": ["DownloadFileName", "HasDownload", "OnlineUrl"]})
+    check("可改字段没被 checkpoint 覆盖 → 报错", False, "居然静默通过了")
+except RuntimeError as e:
+    check("可改字段没被 checkpoint 覆盖 → 报错（回滚不许是残的）", "回滚会不完整" in str(e))
 
 # ⑦ 端到端：真的能收敛
 subject = S()

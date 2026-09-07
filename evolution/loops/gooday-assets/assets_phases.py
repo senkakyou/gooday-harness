@@ -33,21 +33,37 @@ def evaluate(results, inputs=None):
         "reasons": reasons or [f"{total} 项已发布内容全部存在"],
         "failures": broken,
         "evidence": {"total": total, "broken": len(broken),
+                     "present": total - len(broken),   # 【真正可达的绝对数】
                      "items": results},          # 全量落盘，可被重新检验
     }
 
 
 # ══════════════════ Learn ══════════════════
-def _find_twin(path, media):
+def _find_twin(path, media, taken=None):
     """找「同一个文件被改过名」的孪生体。
 
     真实线索（2026-09-07 实测）：库里记 `compare_20260429062048.html`，
     磁盘上是 `compare.html`，而它的 mtime 正是 2026-04-29 06:20:48 ——
     **文件名里的时间戳和磁盘 mtime 对得上，是同一份东西被改了名**。
 
-    两条判据都要满足才认，避免把同名前缀的不同文件错认成孪生：
+    ═══ 三条判据，缺一不可 ═══════════════════════════════════
+
       1. 去掉 `_时间戳` 后的主干名一致
       2. 磁盘 mtime 与文件名里的时间戳相差 ≤ 120 秒
+      3. **这个文件没有被别的工具引用**
+
+    第 3 条是灵犀评审加的，也是最重要的一条。前两条完全没把孪生体
+    跟「它属于谁」绑定：`compare` / `index` / `template` 这类通用主干名很常见，
+    同一批上传的两个工具时间戳差几秒就落在 120 秒窗口内。
+    于是 A 的文件丢了，会被改成指向 **B 的文件**。
+
+    后果比 404 恶劣得多：分数 1.0、门禁全过、巡检转绿，
+    而用户下到的是别的工具的内容 —— **没有任何信号**。
+    404 至少是响亮的失败；这个是安静的错误。
+
+    时间戳用 `calendar.timegm` 按 UTC 解析，不用 `time.mktime`：
+    后者按本机时区，本机现在是 UTC 所以对得上，一旦 TZ 改成 Asia/Shanghai
+    就差 8 小时，孪生全部失配，闭环会静默从「改名修好」退化成「关掉下载」。
     """
     base = os.path.basename(path)
     m = TS_SUFFIX.match(base)
@@ -56,9 +72,14 @@ def _find_twin(path, media):
     cand = os.path.join(os.path.dirname(path), m.group("stem") + m.group("ext"))
     if not os.path.isfile(cand):
         return None
+    # ③ 已被别人引用的文件绝不认领 —— 这条不满足就直接放弃，
+    #    宁可退化成「关掉下载」（响亮），也不要指向别人的文件（安静地错）
+    if taken and os.path.realpath(cand) in taken:
+        return None
     try:
+        import calendar
         import time
-        want = time.mktime(time.strptime(m.group("ts"), "%Y%m%d%H%M%S"))
+        want = calendar.timegm(time.strptime(m.group("ts"), "%Y%m%d%H%M%S"))
         if abs(os.path.getmtime(cand) - want) > 120:
             return None
     except Exception:
@@ -69,9 +90,23 @@ def _find_twin(path, media):
 def learn(evaluation, results, media=None):
     """把失败沉淀成结构化经验。不是写文档，是产出可被 improve 消费的记录。"""
     media = media or os.environ.get("GOODAY_MEDIA", "/srv/gooday-harness/media")
+
+    # 「谁占着哪个文件」——用来挡住「认领别人的文件」。
+    #
+    # ⚠️ 必须按 **工具 Id** 记，不能只记路径：孪生体常常正是**这个工具自己的
+    # 在线文件**（Tools[14] 的 compare.html 就是它自己 OnlineUrl 指的那个）。
+    # 只记路径会把这种正当情形也拒掉，闭环从「改名修好」退化成「关掉下载」——
+    # 第一版就写错成这样，是测试抓出来的。
+    owner = {}
+    for r in (results or []):
+        if r.get("exists"):
+            owner.setdefault(os.path.realpath(r["path"]), set()).add(r["id"])
+
     exps = []
     for b in evaluation.get("failures", []):
-        twin = _find_twin(b["path"], media)
+        # 属于别人的才算被占；属于自己的不算
+        taken = {path for path, ids in owner.items() if ids - {b["id"]}}
+        twin = _find_twin(b["path"], media, taken=taken)
         if twin:
             exps.append({
                 "kind": "renamed_twin",
@@ -143,13 +178,36 @@ def improve(experiences, evaluation):
 
 # ══════════════════ Gate ══════════════════
 def make_gate(baseline_results):
-    """门禁。三条判据同时满足才放行，任一不满足即拒。
+    """门禁。四条判据同时满足才放行，任一不满足即拒。
 
     **fail closed**：本函数抛异常时，引擎按「门禁崩溃 = 不算通过」处理
     （packages/evolve/loop.py 的 gate_crashed 分支，已有测试覆盖）。
     这里不做任何 try/except 兜底成 pass —— 那正是最危险的写法。
+
+    ═══ 第 ③ 条原来是死代码，第 ④ 条是被指出后补的 ═══════════════
+
+    原第 ③ 条写的是「已发布条目总数不许异常减少」，本意是挡「把坏的下架
+    冒充修好」。灵犀评审指出两点，实测都成立：
+
+      · 它**永不触发** —— 阈值恰好按「删光坏项」校准，而删健康项
+        已经被第 ② 条（回归保护）抓住了，它是冗余的。
+      · 更要命的是**它想挡的事，正是 orphan_download 候选自己在干的**：
+        把 HasDownload 关掉，坏项从分母里消失，分数升到 1.0，
+        而文件依然是丢的。按我自己定的标准，这就是藏问题。
+
+    所以改成两条实的：
+      ③ **真正可达的绝对数不许减少**（present）—— 挡住「删健康项提分」，
+        且不像原来那样是恒真式。
+      ④ **必须有实质进展**：要么 present 变多（真修好了），
+        要么 broken 变少且 present 不减（把 404 止住了，属于缓解）。
+
+    第 ④ 条同时保证「什么都没干」拿不到通过。
+    **缓解和修复的区别不靠 Gate 藏起来，靠 evaluate 的 present 台账留在证据里** ——
+    分数到 1.0 时，present 有没有涨得出来，一看便知。
     """
     was_ok = {(r["id"], r["field"]) for r in baseline_results if r["exists"]}
+    base_present = len(was_ok)
+    base_broken = len(baseline_results) - base_present
 
     def gate(variant, inputs, baseline):
         res = variant.run(inputs)
@@ -166,13 +224,22 @@ def make_gate(baseline_results):
         if regressed:
             reasons.append(f"{len(regressed)} 项原本正常的变成缺失：{sorted(regressed)[:3]}")
 
-        # ③ 【已发布的数量不许变】——防止「把坏的下架」被当成改进。
-        #    下架能让分数变好看，但那是把问题藏起来，不是解决。
-        if len(res) < len(baseline_results) - len(
-                [r for r in baseline_results if not r["exists"]]):
-            reasons.append("已发布条目总数异常减少，疑似把内容下架冒充修好")
+        # ③ 真正可达的绝对数不许减少
+        present = len(now_ok)
+        if present < base_present:
+            reasons.append(f"可达条目从 {base_present} 降到 {present} —— "
+                           "分数变好看是靠减少分母，不是靠修好东西")
+
+        # ④ 必须有实质进展：修好了，或至少把 404 止住了
+        broken = len(res) - present
+        if not (present > base_present or
+                (broken < base_broken and present >= base_present)):
+            reasons.append(f"没有实质进展：可达 {base_present}→{present}，"
+                           f"缺失 {base_broken}→{broken}")
 
         return {"passed": not reasons, "score": ev["score"],
-                "reasons": reasons or ["通过率提升，且无回归"]}
+                "present": present, "broken": broken,
+                "reasons": reasons or
+                [f"可达 {base_present}→{present}，缺失 {base_broken}→{broken}，无回归"]}
 
     return gate

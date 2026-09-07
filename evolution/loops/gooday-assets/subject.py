@@ -21,9 +21,8 @@
 `variant()` 把运行库**复制一份到临时文件**，patch 只作用在副本上。
 拿生产当实验场，是这套东西最不该犯的错。
 """
+import json
 import os
-import shutil
-import sqlite3
 import subprocess
 import tempfile
 
@@ -34,16 +33,34 @@ MEDIA = os.environ.get("GOODAY_MEDIA", "/srv/gooday-harness/media")
 
 
 def _sql(db, sql, sudo=True):
-    """读库。生产库归 root，巡检/闭环以 root 跑；开发机上用 sudo -n。
+    """读库，返回 [dict]。
 
-    走 sqlite3 命令行而不是 python sqlite3，是因为**只读也需要目录读权限**，
-    而 sudo -n sqlite3 是本机明确授权过的路径。
+    ═══ 必须 `-json`，不能按 `|` 切 ═══════════════════════════════
+
+    2026-09-07 灵犀评审发现、实测复现：sqlite3 默认用 `|` 分隔列，
+    而工具名里完全可能有竖线（`A|B 对比工具`）。按 `|` split 的后果：
+      · 列数不足 → 那一行被静默跳过，**永远回滚不了**
+      · 列数恰好够 → 字段整体错位，回滚会把 Category 写进 OnlineUrl、
+        IconEmoji 写进 HasDownload ——**回滚动作本身在写坏生产数据**
+    实测就是后者：回滚后 OnlineUrl 变成 '1'、HasDownload 变成了路径。
+
+    而当时 28 项测试全绿 —— 测试数据里没有一个竖线，这个 bug 天然照不到。
+    顺带：`-json` 里 NULL 就是 null，按 `|` 切会读成空串，回滚后 NULL 变空串。
+
+    走 sqlite3 命令行而不是 python sqlite3，是因为生产库归 root，
+    本机只授权了 `sudo sqlite3` 这一条路径。
     """
-    cmd = (["sudo", "-n"] if sudo else []) + ["sqlite3", db, sql]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    # ⚠️ `-json` 必须放在**库路径之后**。本机的 sudoers 规则是
+    #    `sqlite3 <库路径> *` —— 选项放前面就不匹配那条规则，报「需要密码」。
+    #    授权规则长什么样，会决定命令怎么写；这不是风格问题。
+    cmd = (["sudo", "-n"] if sudo else []) + ["sqlite3", db, "-json", sql]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         raise RuntimeError(f"查库失败: {(r.stderr or '').strip()[:200]}")
-    return [l for l in r.stdout.strip().splitlines() if l]
+    out = (r.stdout or "").strip()
+    if not out:
+        return []
+    return json.loads(out)
 
 
 class GoodayAssets:
@@ -52,6 +69,7 @@ class GoodayAssets:
     def __init__(self, db=DB, media=MEDIA, sudo=True):
         self.db, self.media, self.sudo = db, media, sudo
         self._tmp = None                 # 变体持有的临时库，用完删
+        self._touched = []               # 本轮 promote 动过哪些行，rollback 据此定范围
 
     # ── Subject 接口 ────────────────────────────────────────
     def run(self, inputs=None):
@@ -64,16 +82,13 @@ class GoodayAssets:
                     "SELECT Id,Name,OnlineUrl,DownloadFileName,IsOnline,"
                     "HasDownload FROM Tools WHERE IsPublished=1;", self.sudo)
         out = []
-        for line in rows:
-            p = line.split("|")
-            if len(p) < 6:
-                continue
-            tid, name, online, dl, is_on, has_dl = p[0], p[1], p[2], p[3], p[4], p[5]
-            if is_on == "1" and online:
-                out.append(self._item(tid, name, "OnlineUrl", online))
-            if has_dl == "1" and dl:
-                rel = dl if dl.startswith("/") else "/uploads/" + dl
-                out.append(self._item(tid, name, "DownloadFileName", rel))
+        for r in rows:
+            if r.get("IsOnline") and r.get("OnlineUrl"):
+                out.append(self._item(r["Id"], r["Name"], "OnlineUrl", r["OnlineUrl"]))
+            if r.get("HasDownload") and r.get("DownloadFileName"):
+                dl = r["DownloadFileName"]
+                out.append(self._item(r["Id"], r["Name"], "DownloadFileName",
+                                      dl if dl.startswith("/") else "/uploads/" + dl))
         return out
 
     def _item(self, tid, name, field, rel):
@@ -114,33 +129,75 @@ class GoodayAssets:
         return v
 
     def checkpoint(self):
-        """回滚点：受影响工具的**整行原值**。
+        """回滚点：**只存本闭环能改的那几个字段**，加 Id。
 
-        只存被改的字段是不够的——Admin API 的 PUT 是全量覆盖，
-        回滚时必须能把整行原样写回去（CLAUDE.md 记过这个坑）。
+        原来存 13 列，注释写的理由是「Admin API 的 PUT 是全量覆盖」——
+        但实现走的是直连 SQL，理由和代码对不上（灵犀评审指出）。
+        直连 SQL 只改指定列，存全表既无必要，也扩大了回滚的影响面。
+
+        存哪些列由 ALLOWED_FIELDS 派生，不手写：
+        往白名单加字段却忘了同步这里，回滚就会静默变成残的。
         """
-        rows = _sql(self.db,
-                    "SELECT Id,Name,Slug,Description,Category,IconEmoji,IsOnline,"
-                    "OnlineUrl,HasDownload,DownloadFileName,IsPublished,RequireLogin,"
-                    "COALESCE(ReadmeMarkdown,'') FROM Tools WHERE IsPublished=1;",
-                    self.sudo)
-        return {"rows": rows, "db": self.db}
+        cols = ",".join(["Id"] + sorted(self.ALLOWED_FIELDS))
+        return {"rows": _sql(self.db, f"SELECT {cols} FROM Tools;", self.sudo),
+                "fields": sorted(self.ALLOWED_FIELDS), "db": self.db}
+
 
     def promote(self, patch):
-        """真正应用。只有过了 Gate 才会被调用。"""
+        """真正应用。只有过了 Gate 才会被调用。
+
+        【先记下要动哪些行，再动】。顺序不能反：promote 中途炸掉时，
+        引擎会调 rollback，那时必须已经知道该滚哪几行。
+        """
+        self._touched = sorted({int(p["id"]) for p in
+                                (patch if isinstance(patch, list) else [patch])})
         self._apply(self.db, patch, sudo=self.sudo)
 
     def rollback(self, ckpt):
-        """按 checkpoint 把受影响行的字段写回。"""
-        for line in ckpt.get("rows", []):
-            p = line.split("|")
-            if len(p) < 13:
-                continue
-            tid, online_url, has_dl, dl = p[0], p[7], p[8], p[9]
-            self._exec(self.db,
-                       "UPDATE Tools SET OnlineUrl=?, HasDownload=?, "
-                       "DownloadFileName=? WHERE Id=?;",
-                       (online_url, has_dl, dl, tid), sudo=self.sudo)
+        """把**本轮真正改过的那几行**按 checkpoint 写回，并回读校验。
+
+        ═══ 三处是踩过/被指出才明白的 ═══════════════════════════
+
+        **一、只滚自己动过的行。** 原来遍历 checkpoint 全部 1018 行逐行 UPDATE
+        —— 为撤销一行改动而重写整张表。期间别的进程（管理后台、发工具脚本）
+        合法改过别的工具，会被一并抹掉。**回滚是补救手段，它自己不能制造新事故。**
+
+        **二、字段由 ALLOWED_FIELDS 派生**，不手写。能改却滚不回来 = 回滚是残的。
+
+        **三、写完必须回读校验。** 不校验的话，回滚失败和回滚成功长得一模一样，
+        而那正是最需要确定性的时刻。
+        """
+        fields = ckpt.get("fields") or sorted(self.ALLOWED_FIELDS)
+        missing = self.ALLOWED_FIELDS - set(fields)
+        if missing:
+            raise RuntimeError(
+                f"字段 {sorted(missing)} 在可改白名单里，但 checkpoint 没存它，"
+                "回滚会不完整。请让 checkpoint() 与本函数都从 ALLOWED_FIELDS 派生")
+
+        want = set(self._touched or [])
+        restored = []
+        for row in ckpt.get("rows", []):
+            tid = row.get("Id")
+            if want and tid not in want:
+                continue                     # 不是本轮动过的，不碰
+            sets = ", ".join(f"{f}=?" for f in fields)
+            self._exec(self.db, f"UPDATE Tools SET {sets} WHERE Id=?;",
+                       tuple(row.get(f) for f in fields) + (tid,), sudo=self.sudo)
+            restored.append((tid, row))
+
+        # 回读校验：写回去的是不是真的等于 checkpoint
+        for tid, row in restored:
+            cur = _sql(self.db,
+                       f"SELECT {','.join(fields)} FROM Tools WHERE Id={int(tid)};",
+                       self.sudo)
+            if not cur:
+                raise RuntimeError(f"回滚校验失败：Id={tid} 查不到")
+            for f in fields:
+                if cur[0].get(f) != row.get(f):
+                    raise RuntimeError(
+                        f"回滚校验失败：Id={tid} 的 {f} 期望 {row.get(f)!r}，"
+                        f"实际 {cur[0].get(f)!r}")
+
 
     # ── 内部 ────────────────────────────────────────────────
     # 自动改动能碰的字段，**写死在执行层**。
@@ -165,7 +222,14 @@ class GoodayAssets:
 
     @staticmethod
     def _quote(a):
-        """按 SQLite 字面量规则转义。整数不加引号，避免存进 INT 列变成文本。"""
+        """按 SQLite 字面量规则转义。
+
+        None → NULL（不是 'None' 也不是空串）。`-json` 把 NULL 读成 None，
+        回滚时必须能原样写回去 —— 否则 NULL 会变成空串，而
+        「没有下载文件名」和「下载文件名是空字符串」在应用层可能是两回事。
+        """
+        if a is None:
+            return "NULL"
         if isinstance(a, bool):
             return "1" if a else "0"
         if isinstance(a, int):
