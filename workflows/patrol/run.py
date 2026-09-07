@@ -86,11 +86,42 @@ def main():
                 failed_checks.append(name)
                 task.event("check_crashed", "P1", {"check": name, "error": str(e)})
 
-        # 处置：影子模式只记录，不动手
+        # ═══ 处置：按【动作性质】分级，不做 shadow/active 二元 ═══════
+        #
+        # 迁移期 shadow 是对的：旧 patrol 在动手，两个看门狗抢着重启同一服务
+        # 是灾难。但**旧的退役之后，shadow 就是净损失** ——
+        # 发现 P0 也没人处置，而你还以为有看门狗（灵犀 2026-09-07 指出）。
+        #
+        # 二元开关的问题是：一开就全开。所以改成按动作分级：
+        #   · 幂等、可回滚、影响面单一（重启一个服务、修一个文件属主）
+        #     → active 模式下放开
+        #   · 删文件、改数据库、下架内容
+        #     → **永远只记录不执行**，无论什么模式。这类动作出错没得救，
+        #       而看门狗最不该做的就是在错误诊断上自信地动手。
+        #
+        # 判断依据是动作本身的形状，不是「谁声明的」——
+        # 新增检查项的人可能没想过这一层，白名单必须在执行处兜住。
+        SAFE_VERBS = {"systemctl": {"restart", "start", "reset-failed"},
+                      "chown": None, "chmod": None}
+        def _is_reversible(cmd):
+            if not cmd:
+                return False
+            head = os.path.basename(str(cmd[0]))
+            if head not in SAFE_VERBS:
+                return False
+            allowed = SAFE_VERBS[head]
+            return allowed is None or (len(cmd) > 1 and cmd[1] in allowed)
+
         acted = []
         for f in findings:
             act = f.get("action")
             if not act:
+                continue
+            if not _is_reversible(act):
+                # 不可逆动作：任何模式下都不自动执行
+                task.event("action_needs_human", "P1",
+                           {"check": f["check"], "would_run": act,
+                            "why": "动作不在可逆白名单内，永不自动执行"})
                 continue
             if shadow:
                 task.event("action_suppressed", "P3",

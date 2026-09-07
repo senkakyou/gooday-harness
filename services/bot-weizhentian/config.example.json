@@ -1,7 +1,7 @@
 {
   "_readme": "拷贝为 config.json。",
   "mode": "active",
-  "_mode": "readonly=算出来但不产出交付物（迁移期必须），active=真开工。",
+  "_mode": "readonly=算出来但不产出交付物；active=真开工。迁移期必须 readonly（两个执行者会对同一工单重复产出）；2026-09-07 切换完成、旧 bot 已下线，现在用 active。",
   "bot_id": 22,
   "driven_by": 20,
   "_driven_by": "工单由调度中心驱动。它伪装成来自该 id 的消息，好复用 runner 的分组与回执机制。",

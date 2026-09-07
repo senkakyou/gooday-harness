@@ -58,6 +58,18 @@ def main():
         task.event("evaluate_summary", "P3", {"ran": ran, "failed": failed})
         print(f"[evaluate] 跑了 {len(ran)} 个评价器"
               + (f"，{len(failed)} 个失败: {failed}" if failed else ""))
+
+        # 【一个都没有 ≠ 一切正常】。2026-09-07 归档掉唯一那个已结案的评价器
+        # 之后，本工作流每天照跑一次、什么也不评、退出码 0 ——
+        # 「配置了但没在起作用」正是本项目反复栽的那类坑，
+        # 而它此刻长得和「评价器全部通过」一模一样。
+        if not ran and not failed:
+            task.event("no_evaluators", "P2",
+                       {"why": "evolution/evaluators/ 下没有任何成员，本工作流在空转"})
+            print("[evaluate] ⚠️ 一个评价器都没有 —— 本工作流在空转。"
+                  "第二层循环缺了「怎么打分」这一环",
+                  file=sys.stderr)
+            return 1
         return 1 if failed else 0
 
 

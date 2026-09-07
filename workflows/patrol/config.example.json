@@ -1,7 +1,6 @@
 {
-  "_readme": "拷贝为 config.json 后修改。旧 patrol 把这些全写死在 707 行代码里，新的抽出来——迁移期指向旧系统，切换后改指向新系统即可，不用改代码。",
-  "mode": "shadow",
-  "_mode": "shadow=只观察不处置（迁移期必须用这个，否则和旧 patrol 抢着重启服务）；active=发现问题自动处置",
+  "mode": "active",
+  "_mode": "active=按【动作分级】自动处置：幂等可回滚的（重启服务、修属主）执行，删文件/改库/停服务永不自动执行（见 run.py 的 SAFE_VERBS）。shadow=一律只记录。迁移期必须 shadow——两个看门狗抢着重启同一服务是灾难；2026-09-07 旧 patrol 随 /opt/gooday 退役，shadow 从此是净损失：发现 P0 也没人处置，而你还以为有看门狗。",
   "services": [
     {
       "unit": "gooday-harness-bot-lingxi",
@@ -170,5 +169,6 @@
         ]
       }
     ]
-  }
+  },
+  "_readme": "拷贝为 config.json 后按本机改。巡检什么、阈值多少都在这里，不用改代码。"
 }

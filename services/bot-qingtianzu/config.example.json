@@ -1,7 +1,7 @@
 {
   "_readme": "拷贝为 config.json。",
   "mode": "active",
-  "_mode": "readonly=算出来但不发不写（迁移期必须），active=真回复。",
+  "_mode": "readonly=算出来但不发不写；active=真回复。迁移期两套 bot 并存时必须 readonly（会抢同一批未读消息）；2026-09-07 切换完成、旧 bot 已下线，现在用 active。",
   "bot_id": 21,
   "serves": [
     1,

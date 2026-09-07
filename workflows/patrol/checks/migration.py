@@ -10,8 +10,18 @@
 反过来同样危险：装了新的、忘了停旧的，两套并行跑，
 而你以为已经切换完了——直到某天它们开始互相打架。
 
-所以每个 workflow 在 deploy/schedule.cron 里用 `# replaces: <旧路径>` 声明
-它替代了谁，本项检查「新旧恰好一个在跑」：
+═══ 迁移收尾后本项改了叙事（2026-09-07）═══════════════════════
+
+原来它查的是「新旧恰好一个在跑」，两半价值不同：
+
+  · 「新旧都在跑」那一半随旧路径消失而**永久静默** —— 迁移已完成，
+    再也不会有旧的在跑。留着它只会让人以为还有东西在盯。
+  · 「都没在跑」那一半是**永久资产**：它是「这件事现在没人做」的
+    唯一探测器，跟迁移完没完成没关系。
+
+所以叙事从「迁移配对」变成**「每个 workflow 都得有主」**：
+`# replaces:` 从必需降级为可选（只有还处在迁移中的才需要声明），
+而「装了但没人调起」永远是 P0。
   两个都在  → P1（并行，迁移没收尾）
   两个都没  → P0（空档，这件事现在没人做）
 """
@@ -96,6 +106,8 @@ def run(cfg):
         old_running = old in blob
 
         if new_running and old_running:
+            # 仍保留：将来再做迁移时它照样有用。但迁移已收尾，
+            # 现在没有任何 workflow 声明 replaces，所以这条实际不会触发。
             yield {"level": "P1", "what": f"{name}：新旧两套都在跑",
                    "why": f"crontab 里同时有 workflows/{name}/run.py 和 {old}。"
                           f"迁移没收尾——两套并行迟早互相打架，"
@@ -103,9 +115,11 @@ def run(cfg):
                    "fix": f"确认新的稳定后，从 crontab 移除 {old}",
                    "action": None}
         elif not new_running and not old_running:
-            yield {"level": "P0", "what": f"{name}：新旧都没在跑",
-                   "why": f"crontab 里既没有 workflows/{name}/run.py，"
-                          f"也没有 {old}——【这件事现在没人做】。"
-                          f"典型成因：停了旧的但忘了装新的",
-                   "fix": f"跑 sudo bash {repo}/ops/install.sh",
+            yield {"level": "P0", "what": f"{name}：装了但没人调起",
+                   "why": f"{name} 有 deploy/schedule.cron，但 crontab 里找不到它"
+                          + (f"，声明替代的 {old} 也没在跑" if old else "")
+                          + "。**这件事现在没有任何人在做**，而目录还在、"
+                            "代码还在，看起来一切正常",
+                   "fix": "跑 sudo bash /opt/gooday-harness/ops/install.sh 重装托管块；"
+                          "装完等一个执行周期，确认日志文件真的出现",
                    "action": None}
