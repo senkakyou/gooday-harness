@@ -1,0 +1,9 @@
+{
+  "_readme": "拷贝为 config.json。",
+  "mode": "shadow",
+  "_mode": "shadow=只算不写（迁移期必须，旧 dispatcher 仍在跑，两个调度器同时改工单状态是灾难）；active=真执行迁移。",
+  "db": "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db",
+  "batch": 50,
+  "_batch": "一轮最多处理几个事件。",
+  "poll_sec": 15
+}
