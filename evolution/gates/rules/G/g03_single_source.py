@@ -70,7 +70,7 @@ def check(ctx):
         # 模板化的文件名本来就该重复，是结构的一部分，不算副本
         if base in ("README.md", "__init__.py", ".gitkeep", "AGENTS.md", "_template.md",
                     "unit.service", "schedule.cron", "main.py", "run.py",
-                    "evaluate.py"):
+                    "evaluate.py", "config.example.json", "config.json"):
             continue
         by_name[base].append(f)
     for base, paths in sorted(by_name.items()):

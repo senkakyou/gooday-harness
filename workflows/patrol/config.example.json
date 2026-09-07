@@ -1,29 +1,67 @@
 {
   "_readme": "拷贝为 config.json 后修改。旧 patrol 把这些全写死在 707 行代码里，新的抽出来——迁移期指向旧系统，切换后改指向新系统即可，不用改代码。",
-
   "mode": "shadow",
   "_mode": "shadow=只观察不处置（迁移期必须用这个，否则和旧 patrol 抢着重启服务）；active=发现问题自动处置",
-
   "services": [
-    { "unit": "gooday-lingxi",      "heartbeat": "/opt/gooday/scripts/.lingxi-heartbeat",      "max_silent_min": 12 },
-    { "unit": "gooday-ruyi",        "heartbeat": "/opt/gooday/scripts/.ruyi-heartbeat",        "max_silent_min": 10 },
-    { "unit": "gooday-qingtianzu",  "heartbeat": "/opt/gooday/scripts/.qingtianzu-heartbeat",  "max_silent_min": 20 },
-    { "unit": "gooday-weizhentian", "heartbeat": "/opt/gooday/scripts/.weizhentian-heartbeat", "max_silent_min": 35 },
-    { "unit": "gooday-zhaocai",     "heartbeat": "/opt/gooday/scripts/.zhaocai-heartbeat",     "max_silent_min": 10 },
-    { "unit": "gooday-dispatcher",  "heartbeat": "/opt/gooday/scripts/.dispatcher-heartbeat",  "max_silent_min": 10 }
+    {
+      "unit": "gooday-lingxi",
+      "heartbeat": "/opt/gooday/scripts/.lingxi-heartbeat",
+      "max_silent_min": 12
+    },
+    {
+      "unit": "gooday-ruyi",
+      "heartbeat": "/opt/gooday/scripts/.ruyi-heartbeat",
+      "max_silent_min": 10
+    },
+    {
+      "unit": "gooday-qingtianzu",
+      "heartbeat": "/opt/gooday/scripts/.qingtianzu-heartbeat",
+      "max_silent_min": 20
+    },
+    {
+      "unit": "gooday-weizhentian",
+      "heartbeat": "/opt/gooday/scripts/.weizhentian-heartbeat",
+      "max_silent_min": 35
+    },
+    {
+      "unit": "gooday-zhaocai",
+      "heartbeat": "/opt/gooday/scripts/.zhaocai-heartbeat",
+      "max_silent_min": 10
+    },
+    {
+      "unit": "gooday-dispatcher",
+      "heartbeat": "/opt/gooday/scripts/.dispatcher-heartbeat",
+      "max_silent_min": 10
+    }
   ],
   "_services": "max_silent_min 建议 = 该服务正常单轮耗时 × 3。心跳阈值太紧会误杀正在干长活的进程。",
-
   "credentials": [
-    { "who": "agent", "path": "/home/agent/.claude/.credentials.json", "required": true, "owner": "agent" }
+    {
+      "who": "agent",
+      "path": "/home/agent/.claude/.credentials.json",
+      "required": true,
+      "owner": "agent"
+    }
   ],
   "_credentials": "required=true 的缺失即 P0。owner 用于属主漂移检测——root 跑的进程重写文件会把属主改掉，把其他身份锁在外面。",
-
   "backups": [
-    { "name": "gooday-hourly", "dir": "/opt/gooday/backups/hourly", "max_age_hours": 3 }
+    {
+      "name": "gooday-harness-hourly",
+      "dir": "/srv/gooday-harness/backups/gooday/hourly",
+      "max_age_hours": 3
+    },
+    {
+      "name": "gooday-legacy-hourly",
+      "dir": "/opt/gooday/backups/hourly",
+      "max_age_hours": 3
+    }
   ],
-
   "certs": [
-    { "name": "www.gooday.ltd", "port": 443, "sni": "www.gooday.ltd", "warn_days": 7 }
+    {
+      "name": "www.gooday.ltd",
+      "port": 443,
+      "sni": "www.gooday.ltd",
+      "warn_days": 7
+    }
   ]
 }

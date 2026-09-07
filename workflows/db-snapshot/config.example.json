@@ -1,0 +1,19 @@
+{
+  "_readme": "拷贝为 config.json 后修改。迁移期指向旧 Gooday 的库，切换后改指向新库即可。",
+
+  "targets": [
+    {
+      "name": "gooday",
+      "db": "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db",
+      "sanity_table": "Users",
+      "sanity_min_rows": 1,
+      "hourly_keep": 24,
+      "daily_keep": 7,
+      "daily_at_hour": "03"
+    }
+  ],
+  "_targets": "sanity_table/min_rows 用于抓「备份成功但内容是空的」——文件完整不等于数据在。",
+
+  "restore_drill_hour": "04",
+  "_restore_drill": "每天这个点做一次恢复演练：把最新快照当成真要恢复的那份，打开并查关键表。旧脚本从没验过这个——「备份成功」和「能恢复」是两件事，而后者才是你真正需要的那个。"
+}
