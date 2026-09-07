@@ -164,12 +164,33 @@ class GoodayAssets:
                        (p["value"], p["id"]), sudo=sudo)
 
     @staticmethod
-    def _exec(db, sql, args, sudo):
-        # 字段名已在 improve 里限定为白名单，值走参数化
-        q = sql
-        for a in args:
-            v = str(a).replace("'", "''")
-            q = q.replace("?", f"'{v}'", 1)
+    def _quote(a):
+        """按 SQLite 字面量规则转义。整数不加引号，避免存进 INT 列变成文本。"""
+        if isinstance(a, bool):
+            return "1" if a else "0"
+        if isinstance(a, int):
+            return str(a)
+        return "'" + str(a).replace("'", "''") + "'"
+
+    @classmethod
+    def _exec(cls, db, sql, args, sudo):
+        """执行写操作。
+
+        ⚠️ 占位符必须【一次性切分拼接】，不能 `for a in args: q.replace("?", v, 1)`。
+        逐个替换会扫到**已经替换进去的值**：文件名里出现一个 `?`，
+        下一个参数就替换到那个 `?` 上，SQL 结构被破坏。
+        2026-09-07 实测：value="a?b.html" 直接报 `near "1": syntax error`。
+        （这次是响亮失败，但同类写法在别的语句形状下可能变成静默改错行。）
+
+        走 sqlite3 命令行而不是 python sqlite3，是因为生产库归 root，
+        而本机只授权了 `sudo sqlite3` 这一条路径。
+        """
+        parts = sql.split("?")
+        if len(parts) != len(args) + 1:
+            raise RuntimeError(f"占位符数({len(parts)-1})与参数数({len(args)})对不上")
+        q = parts[0]
+        for a, tail in zip(args, parts[1:]):
+            q += cls._quote(a) + tail
         cmd = (["sudo", "-n"] if sudo else []) + ["sqlite3", db, q]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if r.returncode != 0:

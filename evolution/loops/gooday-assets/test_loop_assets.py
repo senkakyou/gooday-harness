@@ -136,6 +136,44 @@ try:
 except RuntimeError:
     check("非数字 Id 被拒", True)
 
+# ⑤b SQL 拼接的边角 —— 这组是自查时才发现的，原来的 17 项全绿却漏掉了它。
+#     `for a in args: q.replace("?", v, 1)` 会扫到已替换进去的值：
+#     文件名里带一个 ? ，下一个参数就替换到那个 ? 上，SQL 结构被破坏。
+for val, desc in [("a?b.html", "含问号"), ("???", "全问号"),
+                  ("it's.html", "含单引号"),
+                  ("a'; UPDATE Tools SET IsPublished=0; --", "注入尝试"),
+                  ('a"b.html', "含双引号"), ("x\\y.html", "含反斜杠")]:
+    try:
+        S()._apply(DB, {"id": 2, "field": "DownloadFileName", "value": val}, sudo=False)
+        got = subprocess.run(["sqlite3", DB,
+              "SELECT DownloadFileName FROM Tools WHERE Id=2;"],
+              capture_output=True, text=True).stdout.strip()
+        pub = subprocess.run(["sqlite3", DB,
+              "SELECT COUNT(*) FROM Tools WHERE IsPublished=1;"],
+              capture_output=True, text=True).stdout.strip()
+        check(f"值{desc}：存入正确且不误伤其它行", got == val and pub == "3",
+              f"存入={got!r} 期望={val!r} 已发布数={pub}")
+    except Exception as e:
+        check(f"值{desc}：存入正确且不误伤其它行", False, f"抛异常 {str(e)[:70]}")
+subprocess.run(["sqlite3", DB,
+    "UPDATE Tools SET DownloadFileName='twin_20260429062048.html' WHERE Id=2;"],
+    capture_output=True)
+
+# 布尔/整数不能被存成文本，否则 C# 那边的 bool 映射可能出问题
+S()._apply(DB, {"id": 3, "field": "HasDownload", "value": 0}, sudo=False)
+ty = subprocess.run(["sqlite3", DB, "SELECT typeof(HasDownload) FROM Tools WHERE Id=3;"],
+                    capture_output=True, text=True).stdout.strip()
+check("整数存成 integer 而不是文本", ty == "integer", ty)
+subprocess.run(["sqlite3", DB, "UPDATE Tools SET HasDownload=1 WHERE Id=3;"],
+               capture_output=True)
+
+# 占位符与参数数量对不上必须报错，不能凑合执行
+try:
+    GoodayAssets._exec(DB, "UPDATE Tools SET Name=? WHERE Id=? AND Name=?;", ("a", 1), False)
+    check("占位符数与参数数不符 → 报错", False, "居然放行了")
+except RuntimeError:
+    check("占位符数与参数数不符 → 报错", True)
+
 # ⑥ Gate 三条判据
 gate = phases.make_gate(res)
 v2 = S().variant({"id": 2, "field": "DownloadFileName", "value": "twin.html"})
