@@ -1,0 +1,18 @@
+{
+  "_readme": "拷贝为 config.json。",
+  "mode": "readonly",
+  "_mode": "readonly=算出来但不产出交付物（迁移期必须），active=真开工。",
+  "bot_id": 22,
+  "driven_by": 20,
+  "_driven_by": "工单由调度中心驱动。它伪装成来自该 id 的消息，好复用 runner 的分组与回执机制。",
+  "serves": [20],
+  "may_send_to": [20],
+  "_may_send_to": "只能发调度中心。【不接触客户】——交付走前台。默认拒绝。",
+  "db": "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db",
+  "batch": 3,
+  "_batch": "一轮最多接几单。不限的话一次拉太多会把 2G 机器打爆。",
+  "api_base": "https://localhost",
+  "model": "opus",
+  "poll_sec": 30,
+  "timeout_sec": 600
+}

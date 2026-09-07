@@ -72,6 +72,14 @@ for dir in "$REPO"/services/*/; do
     for conf in "$dir"/deploy/*.conf; do
         install -m 644 -D "$conf" "$SD/gooday-harness-$name.service.d/$(basename "$conf")"
     done
+
+    # 共享 drop-in：ops/dropins/ 下的对【所有服务】生效。
+    # 这是 G06「配置随归属方走」的例外，理由写在各文件头部——
+    # 当一份配置对每个服务内容完全相同时，随服务走就是 N 份真副本，
+    # 改一次要改 N 处，那正是 G03 单一真源要防的。
+    for conf in "$REPO"/ops/dropins/*.conf; do
+        install -m 644 -D "$conf" "$SD/gooday-harness-$name.service.d/$(basename "$conf")"
+    done
     echo "    gooday-harness-$name"
 done
 

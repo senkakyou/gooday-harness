@@ -26,7 +26,11 @@ TITLE = "单一真源"
 # 配置类型 -> 允许出现的位置（正则），任一命中即合法
 HOMES = {
     ".service": [r"^services/[^/]+/deploy/"],
-    ".conf":    [r"^services/[^/]+/deploy/", r"^ops/nginx/"],
+    # ops/dropins/ 是刻意的例外：当一份配置对【所有服务】内容完全相同时，
+    # 随服务走就是 N 份真副本，改一次要改 N 处——那正是本规则要防的。
+    # 归属方是「所有需要它的服务」这个集合时，它就该放在集合的位置上。
+    # 判据仍然成立：那一份仍然只有一处。
+    ".conf":    [r"^services/[^/]+/deploy/", r"^ops/nginx/", r"^ops/dropins/"],
     ".cron":    [r"^workflows/[^/]+/deploy/"],
 }
 
