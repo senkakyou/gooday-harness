@@ -81,8 +81,20 @@ def _sql(db, sql, sudo=True):
 class GoodayAssets:
     """已发布内容完整性。实现 packages/evolve 的 Subject 接口。"""
 
-    def __init__(self, db=DB, media=MEDIA, sudo=True):
-        self.db, self.media, self.sudo = db, media, sudo
+    # 【是否提权由「库在哪」决定，不是写死的默认值】。
+    # 生产库归 root，只能 sudo sqlite3；而 /tmp 下的副本用 sudo 反而会被
+    # sudoers 拒（规则只放行了生产库那一条路径），闭环整体失败。
+    # 盲测/演练要能指向副本跑，这个判断必须自动（灵犀 2026-09-07 指出）。
+    @staticmethod
+    def _needs_sudo(db_path):
+        try:
+            return not os.access(db_path, os.R_OK)
+        except Exception:
+            return True
+
+    def __init__(self, db=DB, media=MEDIA, sudo=None):
+        self.db, self.media = db, media
+        self.sudo = self._needs_sudo(db) if sudo is None else sudo
         self._tmp = None                 # 变体持有的临时库，用完删
         self._touched = []               # 本轮 promote 动过哪些行，rollback 据此定范围
 

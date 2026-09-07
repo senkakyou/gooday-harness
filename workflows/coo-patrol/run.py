@@ -231,7 +231,12 @@ def send_as(uid, uname, role, receiver_id, content):
 # 现在的分工：**patrol 是唯一动手的**（它有动作分级、白名单、升级路径），
 # coo-patrol 只负责发现业务态异常并上报。收件箱积压的自愈能力
 # 已移到 patrol 的 bot_inbox 检查项，在那边统一受分级约束。
-def restart_service(name):
+def _REMOVED_restart_service(name):
+    """【已停用，保留仅为记录】。coo-patrol 不再动手，见上方注释。
+
+    函数体保留是为了让「以前怎么做的」有出处；但它不再被任何地方调用，
+    改名加 _REMOVED_ 前缀是为了让「不小心又调它」变成 NameError 而不是静默重启。
+    """
     if DRY_RUN:
         log(f"DRY-RUN systemctl restart {name}")
         return True
@@ -246,19 +251,17 @@ def check_services(state, actions, escalations):
         r = subprocess.run(["systemctl", "is-active", svc], capture_output=True, text=True)
         if r.stdout.strip() != "active":
             log(f"服务 {svc} 状态异常：{r.stdout.strip()}")
-            ok = restart_service(svc)
-            actions.append(f"🔧 服务 {svc} 挂了，已{'重启成功' if ok else '重启失败'}")
-            if not ok:
-                escalations.append(f"服务 {svc} 重启失败，需要您登服务器处理")
+            escalations.append(f"服务 {svc} 状态异常（重启由 workflows/patrol 负责）")
 
     r = subprocess.run(["docker", "inspect", "gooday-harness-api", "--format", "{{.State.Running}}"],
                        capture_output=True, text=True)
     if r.stdout.strip() != "true":
+        # 动手交给 patrol（单一执行者）。原来这里 `docker start`，
+        # 留着就是雷：本函数现在没被 main 调用，但随时可能被重新启用，
+        # 而**按关键词搜 restart 搜不到 `docker start`**（灵犀指出，
+        # 所以复核判据要换成「有没有 subprocess 调 systemctl/docker」）。
         log("gooday-harness-api 容器未运行")
-        if not DRY_RUN:
-            subprocess.run(["docker", "start", "gooday-harness-api"], capture_output=True)
-        actions.append("🔧 网站容器 gooday-harness-api 停了，已尝试启动")
-        escalations.append("网站容器曾停止运行，请确认网站是否正常")
+        escalations.append("网站容器停止运行，请确认网站是否正常（启动交给 patrol）")
 
 
 def check_stuck_tickets(state, actions, escalations):
@@ -310,9 +313,15 @@ def check_stuck_tickets(state, actions, escalations):
         elif status == "in_progress" and stale_min > 120:
             if dedup(state, f"wzt-restart-{tid}", 6):
                 continue
-            log(f"工单 {tno} in_progress 卡了 {stale_min/60:.1f} 小时，重启威震天")
-            restart_service("gooday-harness-bot-weizhentian")
-            actions.append(f"♻️ 工单 {tno} 开发超 {stale_min/60:.1f} 小时未交付，已重启威震天（会自动重捡）")
+            # 【取消自愈，改上报】。触发条件是 in_progress > 120 分钟，
+            # 那是「活着但流程不前进」，不是「服务挂了」——重启对前者基本无效，
+            # 只会清掉现场让根因不可复现，还把结果染成「重启后好像好了」。
+            # 而且它和 patrol 新加的退避规则直接冲突：同一工单反复触发
+            # = 反复「成功」= 按判据该升 P1，而不是再重启一次（灵犀 2026-09-07）。
+            log(f"工单 {tno} in_progress 卡了 {stale_min/60:.1f} 小时")
+            escalations.append(
+                f"工单 {tno} 开发超 {stale_min/60:.1f} 小时未交付，威震天疑似卡死。"
+                "判断交给人：重启会清掉现场，根因就查不到了")
 
         elif status == "testing" and stale_min > 48 * 60:
             if dedup(state, f"testing-{tid}", 24):
@@ -453,9 +462,8 @@ def check_heartbeats(state, actions, escalations):
         if stale_min > threshold:
             if dedup(state, f"heartbeat-{name}", 0.5):
                 continue
-            log(f"{name} 心跳停了 {stale_min:.0f} 分钟（阈值{threshold}），判定卡死，重启")
-            restart_service(svc)
-            actions.append(f"♻️ {name} 进程卡死（心跳停了 {stale_min:.0f} 分钟），已重启")
+            log(f"{name} 心跳停了 {stale_min:.0f} 分钟（阈值{threshold}），判定卡死")
+            escalations.append(f"{name} 心跳停了 {stale_min:.0f} 分钟（重启由 workflows/patrol 负责）")
 
 
 BACKUP_ROOT = "/opt/gooday-harness/backups"
