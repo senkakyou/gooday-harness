@@ -306,16 +306,16 @@ ck3 = sub2.checkpoint()
 sub2.promote([{"id": 1, "field": "DownloadFileName", "value": "c1.html"},
               {"id": 2, "field": "DownloadFileName", "value": "c2.html"}])
 subprocess.run(["sqlite3", DB, "DELETE FROM Tools WHERE Id=1;"], capture_output=True)
-try:
-    sub2.rollback(ck3)
-    reported = ""
-except RuntimeError as e:
-    reported = str(e)
+# 行被删属于告知级：返回报告，【不抛】——抛了会让引擎的 decision 永远
+# 停在 status=experimenting，生产已改又已回滚而记录说「还在实验中」
+rep = sub2.rollback(ck3)
+reported = "；".join(rep["problems"])
 r2 = subprocess.run(["sqlite3", DB, "SELECT DownloadFileName FROM Tools WHERE Id=2;"],
                     capture_output=True, text=True).stdout.strip()
 check("一行被删不打断其余回滚（回滚必须尽力做完）",
       r2 == "twin_20260429062048.html", r2)
-check("回滚未完全成功时如实报告，不静默", "已不存在" in reported, reported[:60])
+check("行被删 → 返回报告不抛异常（否则 decision 丢失）",
+      "已不存在" in reported and not rep["unknown_state"], reported[:70])
 subprocess.run(["sqlite3", DB, """INSERT INTO Tools VALUES
   (1,'好工具','a','','系统','x',1,'/uploads/ok.html',1,'ok.html',1,0,'');"""],
     capture_output=True)
@@ -375,6 +375,69 @@ gs = atk_gate(same, None, atk_score)
 check("同一工具的在线页与下载指同一文件 → 不算新共用，不误拦",
       gs["passed"], gs["reasons"][0][:80])
 same.cleanup()
+
+# ⑭ 灵犀第三轮的三个发现
+# ⑭a 真身状态未知时才抛，且抛之前自己留痕
+class WriteFails(GoodayAssets):
+    @classmethod
+    def _exec(cls, db, sql, args, sudo, expect_changes=True):
+        if sql.startswith("UPDATE"):
+            raise RuntimeError("模拟写失败")
+        return super()._exec(db, sql, args, sudo, expect_changes)
+wf = WriteFails(db=DB, media=MEDIA, sudo=False)
+wf._touched = [1]
+try:
+    wf.rollback(S().checkpoint())
+    check("写失败（真身状态未知）→ 抛", False, "居然没抛")
+except RuntimeError as e:
+    check("写失败（真身状态未知）→ 抛，且区别于「行被删」", "状态未知" in str(e), str(e)[:60])
+
+# ⑭b _touched 为空时不许降级成全表回滚
+empty = S()
+rep_empty = empty.rollback(S().checkpoint())
+check("没记录改过哪些行 → 不回滚任何东西（不是全表滚）",
+      rep_empty["restored"] == [] and "未执行任何回滚" in "".join(rep_empty["problems"]),
+      rep_empty)
+
+# ⑭c OnlineUrl 的孪生修复要带 /uploads/ 前缀，DownloadFileName 不带
+pg = os.path.join(MEDIA, "uploads", "page.html")
+open(pg, "w").write("p")
+os.utime(pg, (ts, ts))
+subprocess.run(["sqlite3", DB, """INSERT INTO Tools VALUES
+  (40,'在线页改名了','w','','系统','x',1,'/uploads/page_20260429062048.html',0,NULL,1,0,'');"""],
+    capture_output=True)
+r40 = S().run(None); e40 = phases.evaluate(r40)
+c40 = [c for c in phases.improve(phases.learn(e40, r40, media=MEDIA), e40)
+       if c["patch"]["id"] == 40]
+check("OnlineUrl 孪生修复带 /uploads/ 前缀（不带就永远修不好）",
+      c40 and c40[0]["patch"]["value"] == "/uploads/page.html",
+      c40[0]["patch"] if c40 else "没生成候选")
+if c40:
+    v40 = S().variant(c40[0]["patch"])
+    fixed = [r for r in v40.run(None) if r["id"] == 40]
+    check("应用后该在线页真的可达了", fixed and fixed[0]["exists"],
+          fixed[0] if fixed else "")
+    v40.cleanup()
+
+# ⑭d 未发布草稿的文件不许被已发布工具认领
+sec = os.path.join(MEDIA, "uploads", "secret.html")
+open(sec, "w").write("draft")
+os.utime(sec, (ts, ts))
+subprocess.run(["sqlite3", DB, """
+INSERT INTO Tools VALUES (41,'草稿','dr','','系统','x',1,'/uploads/secret.html',0,NULL,0,0,'');
+INSERT INTO Tools VALUES (42,'已发布的','pb','','系统','x',0,NULL,1,
+  'secret_20260429062048.html',1,0,'');"""], capture_output=True)
+sub42 = S()
+r42 = sub42.run(None); e42 = phases.evaluate(r42)
+k42 = [e["kind"] for e in phases.learn(e42, r42, media=MEDIA,
+                                       all_refs=sub42.all_refs())
+       if e.get("item", {}).get("id") == 42]
+check("未发布草稿的文件不被已发布工具认领（Gate 抓不到这个）",
+      k42 == ["orphan_download"], k42)
+subprocess.run(["sqlite3", DB, "DELETE FROM Tools WHERE Id IN (40,41,42);"],
+               capture_output=True)
+for f in (pg, sec):
+    os.unlink(f)
 
 # ⑦ 端到端：真的能收敛
 subject = S()

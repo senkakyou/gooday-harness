@@ -30,6 +30,18 @@ import time
 import weakref
 
 # 生产库与媒体根。媒体根是容器 /app/wwwroot 的绑定挂载源。
+def _repo_root(start):
+    """向上找 AGENTS.md 认仓库根（别数 dirname 层数，挪个位置就算错）。"""
+    d = start
+    while True:
+        if os.path.exists(os.path.join(d, "AGENTS.md")):
+            return d
+        p = os.path.dirname(d)
+        if p == d:
+            return start
+        d = p
+
+
 DB = os.environ.get("GOODAY_DB",
                     "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db")
 MEDIA = os.environ.get("GOODAY_MEDIA", "/srv/gooday-harness/media")
@@ -100,6 +112,27 @@ class GoodayAssets:
         return {"id": int(tid), "name": name, "field": field,
                 "url": rel, "path": path, "exists": os.path.isfile(path)}
 
+    def all_refs(self):
+        """【全表】的 (工具Id, 文件真实路径) 引用关系，**含未发布的草稿**。
+
+        learn 用它判断「这个文件是不是别人的」。只扫已发布的话，
+        草稿工具的文件不在名单里，会被坏掉的已发布工具认领 ——
+        文件确实存在，于是分数涨、Gate 全过，而用户下到的是草稿内容。
+        Gate 抓不到这个：它只测「存在」，不测「是谁的」。
+        """
+        out = set()
+        for r in _sql(self.db,
+                      "SELECT Id,OnlineUrl,DownloadFileName FROM Tools;", self.sudo):
+            for field, val in (("OnlineUrl", r.get("OnlineUrl")),
+                               ("DownloadFileName", r.get("DownloadFileName"))):
+                if not val:
+                    continue
+                rel = val if val.startswith("/") else (
+                    "/uploads/" + val if field == "DownloadFileName" else "/" + val)
+                out.add((r["Id"], os.path.realpath(
+                    os.path.join(self.media, rel.lstrip("/")))))
+        return out
+
     def variant(self, patch):
         """隔离副本：把库复制到临时文件，patch 只作用在副本上。
 
@@ -107,9 +140,14 @@ class GoodayAssets:
         不会退化成「那就直接在生产上试试」。
         """
         self._sweep_stale()              # 进程被 SIGKILL 时 finalize 也跑不了
+        # 【别 unlink】：mkstemp 出来就是 0600 的 0 字节文件，
+        # 而 0 字节文件本身就是合法的空 sqlite 库，sqlite 会直接往里写。
+        # 原来 unlink 掉让 sqlite 自己建，权限按 umask 落回 0644，还多出两个窗口：
+        # 重建失败时泄漏一个 0644 的半份 Tools 副本（此时 finalize 还没注册，
+        # 只能等 6 小时清扫）；成功路径上「建好→chmod」之间也有 0644 的一瞬。
+        # 不 unlink 就从头到尾 0600，chmod 和竞态窗口都不需要了（灵犀评审建议）。
         fd, tmp = tempfile.mkstemp(prefix="gooday-assets-variant-", suffix=".db")
         os.close(fd)
-        os.unlink(tmp)                   # sqlite 要自己建
 
         # 用 `.dump` 导出再本地重建，而不是 cp 库文件。两个理由：
         #   1. **WAL 模式下直接 cp 主文件会丢数据** —— 新写入还在 -wal 里
@@ -127,19 +165,16 @@ class GoodayAssets:
         if b.returncode != 0:
             raise RuntimeError(f"重建变体库失败: {(b.stderr or '').strip()[:200]}")
 
-        # 【0600】：mkstemp 本来就是 0600，但我们 unlink 后让 sqlite 自己建，
-        # 于是按 umask 落回 0644 —— 而这是生产 Tools 全表的副本，
-        # 留在 /tmp 全机可读（灵犀指出了这个来龙去脉）。重建完立刻收回权限。
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-
         v = GoodayAssets(db=tmp, media=self.media, sudo=False)
         v._tmp = tmp
-        # 【weakref.finalize 而不是 __del__】：GC 和解释器退出都能兜住，
-        # 且不会因为对象参与循环引用而被跳过。引擎不调 cleanup()——
-        # 它不该知道某条闭环的变体是文件还是别的什么，那是 Subject 自己的事。
+        # 【weakref.finalize 而不是 __del__】：GC 和解释器退出都能兜住。
+        # 引擎不调 cleanup()——它不该知道某条闭环的变体是文件还是别的什么，
+        # 那是 Subject 自己的事。
+        #
+        # ⚠️ callback 必须是 staticmethod + 纯字符串参数。
+        # **绝不能写成 `weakref.finalize(v, v.cleanup)`** —— 那样 finalize
+        # 会强引用 v 的绑定方法，v 永远不被回收，临时库永远不删。
+        # 现在这条链是 v._fin → finalize → weakref(v)，不成环。
         v._fin = weakref.finalize(v, GoodayAssets._unlink_quiet, tmp)
         v._apply(tmp, patch, sudo=False)
         return v
@@ -169,19 +204,27 @@ class GoodayAssets:
                                 (patch if isinstance(patch, list) else [patch])})
         self._apply(self.db, patch, sudo=self.sudo)
 
-    def rollback(self, ckpt):
-        """把**本轮真正改过的那几行**按 checkpoint 写回，并回读校验。
+    def rollback(self, ckpt, ids=None):
+        """把本轮改过的行按 checkpoint 写回。返回 {restored, problems}。
 
-        ═══ 三处是踩过/被指出才明白的 ═══════════════════════════
+        ═══ 只在【真身状态未知】时抛 ═══════════════════════════════
 
-        **一、只滚自己动过的行。** 原来遍历 checkpoint 全部 1018 行逐行 UPDATE
-        —— 为撤销一行改动而重写整张表。期间别的进程（管理后台、发工具脚本）
-        合法改过别的工具，会被一并抹掉。**回滚是补救手段，它自己不能制造新事故。**
+        引擎里三处 `self.subject.rollback(ckpt)` 都是裸调用，
+        紧跟在后面的 `dec.update(status="rolled_back")` 和 `_write(dpath, dec)`
+        才是落盘留痕。所以**这里一抛，Decision 就永远停在 status=experimenting**
+        —— 生产已经被 promote 改过、又已经回滚干净，而记录说「还在实验中」。
+        那正是本项目最恨的「执行失败但系统认为成功」的镜像版（灵犀评审指出）。
 
-        **二、字段由 ALLOWED_FIELDS 派生**，不手写。能改却滚不回来 = 回滚是残的。
+        所以两种性质分开，绝不压成同一个异常：
+          · **行已不存在** —— 没什么可滚，属于告知级。记进 problems，不抛。
+          · **写失败 / 回读不符** —— 真身可能还带着改动，必须叫人。抛。
+            抛之前先自己落一条 P0 事件，这样即使引擎那边的 decision
+            没写成，证据链上仍有记录。
 
-        **三、写完必须回读校验。** 不校验的话，回滚失败和回滚成功长得一模一样，
-        而那正是最需要确定性的时刻。
+        `ids` 显式指定要滚哪些行；不传则用本轮 promote 记下的 _touched。
+        **两者都空 = 没什么可滚，不是「全滚」** —— checkpoint 就是为崩溃后
+        人工恢复才落盘的，恢复脚本新建 subject 再调 rollback 时 _touched 是空的，
+        降级成全表 1018 行回滚正好踩上要避免的那件事。要全滚请显式传 ids。
         """
         fields = ckpt.get("fields") or sorted(self.ALLOWED_FIELDS)
         missing = self.ALLOWED_FIELDS - set(fields)
@@ -190,43 +233,67 @@ class GoodayAssets:
                 f"字段 {sorted(missing)} 在可改白名单里，但 checkpoint 没存它，"
                 "回滚会不完整。请让 checkpoint() 与本函数都从 ALLOWED_FIELDS 派生")
 
-        want = set(self._touched or [])
-        restored, problems = [], []
+        want = set(ids) if ids is not None else set(self._touched or [])
+        report = {"restored": [], "problems": [], "unknown_state": False}
+        if not want:
+            report["problems"].append("没有记录本轮改过哪些行，未执行任何回滚")
+            return report
+
         for row in ckpt.get("rows", []):
             tid = row.get("Id")
-            if want and tid not in want:
-                continue                     # 不是本轮动过的，不碰
+            if tid not in want:
+                continue
             sets = ", ".join(f"{f}=?" for f in fields)
             try:
                 n = self._exec(self.db, f"UPDATE Tools SET {sets} WHERE Id=?;",
                                tuple(row.get(f) for f in fields) + (tid,),
                                sudo=self.sudo, expect_changes=False)
             except Exception as e:
-                problems.append(f"Id={tid} 回滚写入失败: {e}")
-                continue                     # 【继续滚剩下的】
-            if n == 0:
-                problems.append(f"Id={tid} 已不存在，无法回滚（checkpoint 之后被删）")
+                # 写失败 = 真身可能还带着改动
+                report["problems"].append(f"Id={tid} 回滚写入失败: {e}")
+                report["unknown_state"] = True
                 continue
-            restored.append((tid, row))
+            if n == 0:
+                report["problems"].append(f"Id={tid} 已不存在（checkpoint 之后被删），无可回滚")
+                continue
+            report["restored"].append(tid)
 
-        # 回读校验：写回去的是不是真的等于 checkpoint。
-        # 不校验的话，回滚失败和回滚成功长得一模一样。
-        for tid, row in restored:
+        # 回读校验：不校验的话，回滚失败和回滚成功长得一模一样
+        for tid in list(report["restored"]):
+            row = next((r for r in ckpt["rows"] if r.get("Id") == tid), None)
             cur = _sql(self.db,
                        f"SELECT {','.join(fields)} FROM Tools WHERE Id={int(tid)};",
                        self.sudo)
-            if not cur:
-                problems.append(f"Id={tid} 回读不到")
+            if not cur or row is None:
+                report["problems"].append(f"Id={tid} 回读不到")
+                report["unknown_state"] = True
                 continue
             for f in fields:
                 if cur[0].get(f) != row.get(f):
-                    problems.append(
+                    report["problems"].append(
                         f"Id={tid} 的 {f} 期望 {row.get(f)!r} 实际 {cur[0].get(f)!r}")
+                    report["unknown_state"] = True
 
-        # 【先把能滚的都滚完，再报问题】——顺序不能反
-        if problems:
-            raise RuntimeError("回滚未完全成功（其余行已尽力复原）："
-                               + "；".join(problems[:5]))
+        if report["unknown_state"]:
+            # 先自己留痕再抛：引擎那边的 decision 写不成时，至少证据链上有
+            self._emit_p0("rollback_incomplete", report)
+            raise RuntimeError("回滚未完成，真身状态未知（其余行已尽力复原）："
+                               + "；".join(report["problems"][:5]))
+        return report
+
+    def _emit_p0(self, kind, payload):
+        """出事时自己往 trace 落一条 P0。复用 packages/trace，不另造日志。"""
+        try:
+            import sys as _sys
+            tp = os.path.join(_repo_root(os.path.dirname(os.path.abspath(__file__))),
+                              "packages", "trace")
+            if tp not in _sys.path:
+                _sys.path.insert(0, tp)
+            from trace import Task
+            with Task("gooday-assets-rollback", actor="gooday-assets") as t:
+                t.event(kind, "P0", payload)
+        except Exception:
+            pass                          # 留痕失败不能反过来盖掉原始故障
 
 
     # ── 内部 ────────────────────────────────────────────────

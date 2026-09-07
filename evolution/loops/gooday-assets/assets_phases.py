@@ -87,8 +87,13 @@ def _find_twin(path, media, taken=None):
     return cand
 
 
-def learn(evaluation, results, media=None):
-    """把失败沉淀成结构化经验。不是写文档，是产出可被 improve 消费的记录。"""
+def learn(evaluation, results, media=None, all_refs=None):
+    """把失败沉淀成结构化经验。不是写文档，是产出可被 improve 消费的记录。
+
+    `all_refs` 是【全表】的 (工具Id, 文件路径) 引用关系，包含未发布的草稿。
+    不传时退化成只看本轮 results（即已发布的），那会留下一个静默错误的入口 ——
+    见下面 owner 的注释。
+    """
     media = media or os.environ.get("GOODAY_MEDIA", "/srv/gooday-harness/media")
 
     # 「谁占着哪个文件」——用来挡住「认领别人的文件」。
@@ -97,7 +102,14 @@ def learn(evaluation, results, media=None):
     # 在线文件**（Tools[14] 的 compare.html 就是它自己 OnlineUrl 指的那个）。
     # 只记路径会把这种正当情形也拒掉，闭环从「改名修好」退化成「关掉下载」——
     # 第一版就写错成这样，是测试抓出来的。
+    # ⚠️ 必须覆盖【全表】，不能只看本轮 results（IsPublished=1）。
+    # 只扫已发布的话，「未发布草稿工具的文件」不在 taken 里，
+    # 可以被一个坏掉的已发布工具认领：文件存在 → present+1、分数涨、
+    # Gate 四条判据全过。**Gate 结构上抓不到这个——它只测「存在」，不测「是谁的」。**
+    # 这是最后一个静默错误的入口（灵犀评审发现）。
     owner = {}
+    for tid, path in (all_refs or []):
+        owner.setdefault(path, set()).add(tid)
     for r in (results or []):
         if r.get("exists"):
             owner.setdefault(os.path.realpath(r["path"]), set()).add(r["id"])
@@ -144,8 +156,18 @@ def improve(experiences, evaluation):
         if e["kind"] == "renamed_twin":
             if "DownloadFileName" not in WRITABLE:
                 continue
-            new = e["twin_rel"].lstrip("/")
-            new = new[len("uploads/"):] if new.startswith("uploads/") else new
+            # 【前缀按 field 分】——两个字段的路径规则不同（见 subject._item）：
+            #   OnlineUrl        存的是相对 media 根的完整路径，`/uploads/x.html`
+            #   DownloadFileName 存裸文件名，run() 时补 `/uploads/` 前缀
+            # 原来无条件剥掉 `uploads/`，于是 OnlineUrl 的孪生修复写成
+            # `compare.html`，实际去找 `<media>/compare.html`，**必不存在**。
+            # Gate 会拒（安全），但理由报的是「没有实质进展」，把真因盖掉了——
+            # 结果是改名的在线页永远修不好，也永远没人知道为什么（灵犀评审发现）。
+            rel = e["twin_rel"] if e["twin_rel"].startswith("/") else "/" + e["twin_rel"]
+            if it["field"] == "DownloadFileName":
+                new = rel[len("/uploads/"):] if rel.startswith("/uploads/") else rel.lstrip("/")
+            else:
+                new = rel
             cands.append({
                 "target": f"Tools[{it['id']}].{it['field']} → {new}",
                 "why": e["what"],

@@ -58,7 +58,8 @@ def build():
     return Loop(
         "gooday-assets", subject,
         evaluator=phases.evaluate,
-        learner=lambda ev, res: phases.learn(ev, res),
+        learner=lambda ev, res: phases.learn(ev, res,
+                                             all_refs=subject.all_refs()),
         improver=phases.improve,
         gate=phases.make_gate(baseline_results),
         inputs=None,
