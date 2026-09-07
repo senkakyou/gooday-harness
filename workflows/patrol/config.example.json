@@ -4,37 +4,42 @@
   "_mode": "shadow=只观察不处置（迁移期必须用这个，否则和旧 patrol 抢着重启服务）；active=发现问题自动处置",
   "services": [
     {
-      "unit": "gooday-lingxi",
-      "heartbeat": "/opt/gooday/scripts/.lingxi-heartbeat",
+      "unit": "gooday-harness-bot-lingxi",
+      "heartbeat": "/var/lib/gooday-harness/state/bot-lingxi/heartbeat",
       "max_silent_min": 12
     },
     {
-      "unit": "gooday-ruyi",
-      "heartbeat": "/opt/gooday/scripts/.ruyi-heartbeat",
+      "unit": "gooday-harness-bot-ruyi",
+      "heartbeat": "/var/lib/gooday-harness/state/bot-ruyi/heartbeat",
       "max_silent_min": 10
     },
     {
-      "unit": "gooday-qingtianzu",
-      "heartbeat": "/opt/gooday/scripts/.qingtianzu-heartbeat",
+      "unit": "gooday-harness-bot-qingtianzu",
+      "heartbeat": "/var/lib/gooday-harness/state/bot-qingtianzu/heartbeat",
       "max_silent_min": 20
     },
     {
-      "unit": "gooday-weizhentian",
-      "heartbeat": "/opt/gooday/scripts/.weizhentian-heartbeat",
+      "unit": "gooday-harness-bot-weizhentian",
+      "heartbeat": "/var/lib/gooday-harness/state/bot-weizhentian/heartbeat",
       "max_silent_min": 35
     },
     {
-      "unit": "gooday-zhaocai",
-      "heartbeat": "/opt/gooday/scripts/.zhaocai-heartbeat",
+      "unit": "gooday-harness-bot-zhaocai",
+      "heartbeat": "/var/lib/gooday-harness/state/bot-zhaocai/heartbeat",
       "max_silent_min": 10
     },
     {
-      "unit": "gooday-dispatcher",
-      "heartbeat": "/opt/gooday/scripts/.dispatcher-heartbeat",
+      "unit": "gooday-harness-dispatcher",
+      "heartbeat": "/var/lib/gooday-harness/state/dispatcher/heartbeat",
       "max_silent_min": 10
+    },
+    {
+      "unit": "gooday-harness-ocr",
+      "heartbeat": "/var/lib/gooday-harness/state/ocr/heartbeat",
+      "max_silent_min": 5
     }
   ],
-  "_services": "max_silent_min 建议 = 该服务正常单轮耗时 × 3。心跳阈值太紧会误杀正在干长活的进程。",
+  "_services": "旧 gooday-* 已于 2026-09-07 停用并 disable，巡检目标改指新架构。max_silent_min 建议=正常单轮耗时×3。",
   "credentials": [
     {
       "who": "agent",
@@ -81,5 +86,23 @@
   ],
   "_databases": "迁移期指向旧库；切换后改指向新库。只读探测，不给已吃紧的库加负担。",
   "repo": "/opt/gooday-harness",
-  "_repo": "读各 workflow 的 replaces 声明，检查迁移是否成对完成。"
+  "_repo": "读各 workflow 的 replaces 声明，检查迁移是否成对完成。",
+  "assets": [
+    {
+      "name": "gooday",
+      "db": "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db",
+      "webroot": "/opt/gooday/src/GoodayTools/wwwroot",
+      "queries": [
+        [
+          "在线工具",
+          "SELECT Name, OnlineUrl FROM Tools WHERE IsPublished=1 AND IsOnline=1 AND COALESCE(OnlineUrl,'')<>''"
+        ],
+        [
+          "可下载工具",
+          "SELECT Name, '/uploads/'||DownloadFileName FROM Tools WHERE IsPublished=1 AND HasDownload=1 AND COALESCE(DownloadFileName,'')<>''"
+        ]
+      ]
+    }
+  ],
+  "_assets": "已发布内容的文件还在不在。这类丢失特别危险：页面照常列出来，点进去才 404，后台看起来一切正常。"
 }
