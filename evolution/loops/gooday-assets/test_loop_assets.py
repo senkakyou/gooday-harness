@@ -281,6 +281,25 @@ try:
 except RuntimeError as e:
     check("可改字段没被 checkpoint 覆盖 → 报错（回滚不许是残的）", "回滚会不完整" in str(e))
 
+# ⑪ 灵犀提的两条零碎
+# ⑪a 临时库权限 0600 且用完自动清 —— 它是生产 Tools 全表的副本，
+#     0644 留在 /tmp 就是全机可读；引擎不调 cleanup，得 Subject 自己兜
+vperm = S().variant({"id": 1, "field": "DownloadFileName", "value": "ok.html"})
+mode = oct(os.stat(vperm.db).st_mode & 0o777)
+check("变体临时库权限 0600（不是默认的 0644）", mode == "0o600", mode)
+leaked = vperm.db
+del vperm                       # 触发 __del__ 兜底清理
+import gc; gc.collect()
+check("变体对象被回收时临时库自动清掉（引擎不调 cleanup）",
+      not os.path.exists(leaked), leaked)
+
+# ⑪b UPDATE 匹配 0 行必须报错 —— 否则「工具已被删除」会记成一次成功的 promote
+try:
+    S()._apply(DB, {"id": 999999, "field": "HasDownload", "value": 0}, sudo=False)
+    check("UPDATE 匹配 0 行 → 报错（不许记成 promoted）", False, "居然算成功了")
+except RuntimeError as e:
+    check("UPDATE 匹配 0 行 → 报错（不许记成 promoted）", "0 行" in str(e), str(e)[:60])
+
 # ⑦ 端到端：真的能收敛
 subject = S()
 scores = []

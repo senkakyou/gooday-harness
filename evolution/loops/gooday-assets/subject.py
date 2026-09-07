@@ -123,6 +123,13 @@ class GoodayAssets:
         if b.returncode != 0:
             raise RuntimeError(f"重建变体库失败: {(b.stderr or '').strip()[:200]}")
 
+        # 【0600】：默认 umask 会落成 0644，而这是生产 Tools 全表的副本，
+        # 留在 /tmp 全机可读。它是实验用的临时数据，不该被别人看见。
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+
         v = GoodayAssets(db=tmp, media=self.media, sudo=False)
         v._tmp = tmp
         v._apply(tmp, patch, sudo=False)
@@ -255,10 +262,19 @@ class GoodayAssets:
         q = parts[0]
         for a, tail in zip(args, parts[1:]):
             q += cls._quote(a) + tail
-        cmd = (["sudo", "-n"] if sudo else []) + ["sqlite3", db, q]
+        # 【要求真的改到了行】。`UPDATE ... WHERE Id=999` 匹配 0 行时
+        # sqlite 返回 0（成功），于是「工具已被删除」会被记成一次成功的 promote，
+        # 而 Decision 里写着 promoted、实际什么也没发生（灵犀评审指出）。
+        # 加一句 changes() 让它说话。
+        q_with_check = q.rstrip().rstrip(";") + "; SELECT changes();"
+        cmd = (["sudo", "-n"] if sudo else []) + ["sqlite3", db, q_with_check]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             raise RuntimeError(f"写库失败: {(r.stderr or '').strip()[:200]}")
+        changed = (r.stdout or "").strip().splitlines()
+        if changed and changed[-1].strip() == "0":
+            raise RuntimeError(
+                f"写库匹配 0 行 —— 目标可能已被删除。语句: {q[:120]}")
 
     def cleanup(self):
         if self._tmp and os.path.exists(self._tmp):
@@ -266,3 +282,18 @@ class GoodayAssets:
                 os.unlink(self._tmp)
             except OSError:
                 pass
+            self._tmp = None
+
+    def __del__(self):
+        """兜底清理临时库。
+
+        引擎（packages/evolve/loop.py）不调 `variant.cleanup()` —— 它不该知道
+        某条闭环的变体是个文件还是别的什么，那是 Subject 自己的事。
+        与其为一条闭环去改冻结的公共引擎，不如在这里自己兜住：
+        **谁分配谁释放**。不这样的话每轮在 /tmp 留一份全表副本，
+        跑上几个月就是一地垃圾（灵犀评审指出）。
+        """
+        try:
+            self.cleanup()
+        except Exception:
+            pass                          # 析构里不许抛，抛了会污染解释器退出
