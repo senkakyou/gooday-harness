@@ -216,6 +216,21 @@ def send_as(uid, uname, role, receiver_id, content):
     return api_call("POST", f"/api/messages/{receiver_id}", {"content": content},
                     uid=uid, uname=uname, role=role)
 
+# ═══ 2026-09-07：coo-patrol 不再自己动手 ═══════════════════════════
+#
+# 摘掉的原因不是「重复」那么简单，是**两个看门狗同时对同一批 unit 动手**：
+#   · 本文件 check_dispatcher 在 :00 重启 dispatcher（心跳停 >10 分钟）
+#   · workflows/patrol 的 services 检查在 :02 用同样的阈值再重启一次
+# 两边看的还是**两个不同的心跳文件**，谁也不知道对方刚动过手。
+# patrol 当初设成 shadow 就是为了防这个；把 patrol 切 active 时若不摘这里，
+# 那件事会以另一个形状原样回来（灵犀 2026-09-07 指出，我漏了）。
+#
+# 我漏掉的原因值得记：我核对的是「注掉了哪几个 check」，
+# **没核对剩下的 check 里还有没有 restart** —— 查了标签，没查行为。
+#
+# 现在的分工：**patrol 是唯一动手的**（它有动作分级、白名单、升级路径），
+# coo-patrol 只负责发现业务态异常并上报。收件箱积压的自愈能力
+# 已移到 patrol 的 bot_inbox 检查项，在那边统一受分级约束。
 def restart_service(name):
     if DRY_RUN:
         log(f"DRY-RUN systemctl restart {name}")
@@ -406,9 +421,11 @@ def check_inbox_backlog(state, actions, escalations):
             if row["n"] and age_minutes(row["oldest"]) > 30:
                 if dedup(state, f"backlog-{uid}", 1):
                     continue
-                log(f"{svc} 收件箱积压 {row['n']} 条（最老 {age_minutes(row['oldest']):.0f} 分钟），重启")
-                restart_service(svc)
-                actions.append(f"♻️ {svc} 收件箱积压 {row['n']} 条未读超 30 分钟，已重启服务")
+                log(f"{svc} 收件箱积压 {row['n']} 条（最老 {age_minutes(row['oldest']):.0f} 分钟）")
+                escalations.append(
+                    f"{svc} 收件箱积压 {row['n']} 条未读超 30 分钟。"
+                    "（自愈已移交 workflows/patrol 的 bot_inbox 检查项，"
+                    "在那边受动作分级与退避约束）")
 
 
 # 心跳阈值（分钟）按各 bot 单次最长 Claude 工作时间设定：
@@ -569,9 +586,11 @@ def check_dispatcher(state, actions, escalations):
         return
     stale_min = (time.time() - hb) / 60
     if stale_min > 10:
-        log(f"调度器心跳停了 {stale_min:.0f} 分钟，重启 gooday-dispatcher")
-        restart_service("gooday-harness-dispatcher")
-        actions.append(f"♻️ 灵犀调度器卡死（心跳停 {stale_min:.0f} 分钟），已重启")
+        log(f"调度器心跳停了 {stale_min:.0f} 分钟")
+        escalations.append(
+            f"灵犀调度器心跳停了 {stale_min:.0f} 分钟。"
+            "（重启由 workflows/patrol 负责——它用同样的阈值看同一个 unit，"
+            "两边都动手就是两个看门狗抢着重启同一个服务）")
         # 连续两轮（>15min）仍无心跳 = 重启无效，升 P0
         if stale_min > 15 and not dedup(state, "dispatcher-dead", 1):
             escalations.append("🚨 P0：灵犀调度器重启后仍无心跳，事件流转可能停滞，请尽快查 journalctl -u gooday-dispatcher")

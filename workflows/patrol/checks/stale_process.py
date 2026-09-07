@@ -39,7 +39,12 @@ def _newest_mtime(paths):
             for dp, dns, fns in os.walk(p):
                 dns[:] = [d for d in dns if d not in ("__pycache__", ".git")]
                 for fn in fns:
-                    if not fn.endswith((".py", ".sh", ".md", ".json")):
+                    # 【只认真正影响运行行为的文件】。
+                    # 改 README 或 config.example.json 里的说明文字不需要重启服务，
+                    # 而把它们算进来就会天天喊「跑的是旧代码」——
+                    # 狼来了几次之后，真出事那次也没人看（我自己第一版就这样：
+                    # 只改了 _mode 的说明文字，六个服务全报 P1）。
+                    if not fn.endswith((".py", ".sh")) and fn != "config.json":
                         continue
                     f = os.path.join(dp, fn)
                     try:

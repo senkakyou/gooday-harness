@@ -18,6 +18,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -25,6 +26,7 @@ sys.path.insert(0, os.path.join(REPO, "packages", "trace"))
 
 from trace import Task                                    # noqa: E402
 
+STATE = os.environ.get("GOODAY_HARNESS_STATE", "/var/lib/gooday-harness")
 CHECKS_DIR = os.path.join(HERE, "checks")
 CONFIG = os.path.join(HERE, "config.json")
 TRACE_ROOT = os.environ.get("GOODAY_HARNESS_STATE", "/var/lib/gooday-harness")
@@ -101,8 +103,16 @@ def main():
         #
         # 判断依据是动作本身的形状，不是「谁声明的」——
         # 新增检查项的人可能没想过这一层，白名单必须在执行处兜住。
+        # 【动词和宾语都要兜住】。原来 chown/chmd 的允许参数写成 None
+        # = 任意参数任意路径，`["chown","-R","x:x","/"]` 能过；
+        # systemctl restart 也能重启任意 unit（灵犀 2026-09-07 指出）。
+        # 宾语必须限定在 config 里【已声明】的对象上 ——
+        # 检查项作者能写出什么动作是开放的，能作用于什么对象不该是。
         SAFE_VERBS = {"systemctl": {"restart", "start", "reset-failed"},
                       "chown": None, "chmod": None}
+        known_units = {s_.get("unit") for s_ in cfg.get("services", []) if s_.get("unit")}
+        known_paths = {c_.get("path") for c_ in cfg.get("credentials", []) if c_.get("path")}
+
         def _is_reversible(cmd):
             if not cmd:
                 return False
@@ -110,7 +120,33 @@ def main():
             if head not in SAFE_VERBS:
                 return False
             allowed = SAFE_VERBS[head]
-            return allowed is None or (len(cmd) > 1 and cmd[1] in allowed)
+            if allowed is not None and not (len(cmd) > 1 and cmd[1] in allowed):
+                return False
+            # 宾语校验
+            if head == "systemctl":
+                return len(cmd) > 2 and cmd[2] in known_units
+            return any(str(a) in known_paths for a in cmd[1:])
+
+        # 【退避 + 自愈无效要升级】。原来没有：崩溃循环的服务每 5 分钟重启一次，
+        # 每次都是 action_taken P2、退出 0 —— **一天 288 次自愈成功，
+        # 长得和「一切正常」一模一样**，正是要杀的那种假绿。
+        # 旧 coo-patrol 有 dedup() 和「重启后仍无心跳 → P0」，新的漏了。
+        ACT_STATE = os.path.join(STATE, "state", "patrol", "actions.json")
+        try:
+            with open(ACT_STATE, encoding="utf-8") as _f:
+                act_hist = json.load(_f)
+        except Exception:
+            act_hist = {}
+
+        def _act_key(f_, cmd):
+            return f"{f_['check']}::{' '.join(map(str, cmd))}"
+
+        def _backoff_ok(key, now):
+            """同一动作的退避：1 次后等 10 分钟，3 次后等 1 小时。"""
+            h = act_hist.get(key, {})
+            n, last = h.get("count", 0), h.get("last", 0)
+            wait = 0 if n == 0 else (600 if n < 3 else 3600)
+            return (now - last) >= wait, n
 
         acted = []
         for f in findings:
@@ -127,13 +163,38 @@ def main():
                 task.event("action_suppressed", "P3",
                            {"check": f["check"], "would_run": act})
                 continue
+            key = _act_key(f, act)
+            now = time.time()
+            ok_to_act, prior = _backoff_ok(key, now)
+            if not ok_to_act:
+                task.event("action_backoff", "P2",
+                           {"check": f["check"], "would_run": act, "prior_attempts": prior,
+                            "why": "同一动作已重复多次，退避中——反复自愈说明没治本"})
+                continue
             try:
                 subprocess.run(act, capture_output=True, timeout=60, check=True)
                 acted.append(act)
-                task.event("action_taken", "P2", {"check": f["check"], "ran": act})
+                act_hist[key] = {"count": prior + 1, "last": now}
+                # 【反复成功比失败更值得警惕】：修好了就不该再修一次
+                lvl = "P2" if prior < 2 else "P1"
+                task.event("action_taken", lvl,
+                           {"check": f["check"], "ran": act, "attempt": prior + 1,
+                            "why": ("第 %d 次对同一目标动手——自愈没治本，"
+                                    "该查根因了" % (prior + 1)) if prior >= 2 else None})
             except Exception as e:
+                act_hist[key] = {"count": prior + 1, "last": now}
                 task.event("action_failed", "P1",
                            {"check": f["check"], "ran": act, "error": str(e)})
+
+        # 动作历史落盘：退避要跨轮次才有意义
+        try:
+            os.makedirs(os.path.dirname(ACT_STATE), exist_ok=True)
+            cutoff = time.time() - 7 * 86400
+            act_hist = {k: v for k, v in act_hist.items() if v.get("last", 0) > cutoff}
+            with open(ACT_STATE, "w", encoding="utf-8") as _f:
+                json.dump(act_hist, _f, ensure_ascii=False)
+        except Exception as e:
+            task.event("action_state_write_failed", "P1", {"error": str(e)})
 
         # 自检：证据链是不是真的写进去了。
         # 实测踩到：/var/lib 属主是 root 而巡检以别的身份跑，trace 全部 PermissionError。
