@@ -276,13 +276,24 @@ class GoodayAssets:
 
         if report["unknown_state"]:
             # 先自己留痕再抛：引擎那边的 decision 写不成时，至少证据链上有
-            self._emit_p0("rollback_incomplete", report)
+            self._emit("rollback_incomplete", "P0", report)
             raise RuntimeError("回滚未完成，真身状态未知（其余行已尽力复原）："
                                + "；".join(report["problems"][:5]))
+
+        # 【告知级的也要落痕】。返回 dict 给调用方是对的，但引擎不看返回值 ——
+        # 「行已不存在，无可回滚」这种信息就只活在一个没人读的字典里，等于没记。
+        # 自己往 trace 落一条 P2：证据链上留得住，patrol 也看得见。
+        if report["problems"]:
+            self._emit("rollback_partial", "P2", report)
         return report
 
-    def _emit_p0(self, kind, payload):
-        """出事时自己往 trace 落一条 P0。复用 packages/trace，不另造日志。"""
+    def _emit(self, kind, level, payload):
+        """自己往 trace 落一条事件。复用 packages/trace，不另造日志系统。
+
+        为什么 Subject 要自己留痕：引擎只落 Decision，而 Decision 里
+        没有「回滚时哪几行滚不动」这种颗粒度；且 rollback 抛异常那条路径上
+        引擎的 Decision 根本写不成。**能自己说的话就自己说。**
+        """
         try:
             import sys as _sys
             tp = os.path.join(_repo_root(os.path.dirname(os.path.abspath(__file__))),
@@ -291,7 +302,7 @@ class GoodayAssets:
                 _sys.path.insert(0, tp)
             from trace import Task
             with Task("gooday-assets-rollback", actor="gooday-assets") as t:
-                t.event(kind, "P0", payload)
+                t.event(kind, level, payload)
         except Exception:
             pass                          # 留痕失败不能反过来盖掉原始故障
 
