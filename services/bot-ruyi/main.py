@@ -17,6 +17,7 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(REPO, "packages", "botkit"))
 
 from runner import Bot                                    # noqa: E402
+import outbound                                          # noqa: E402
 
 NAME = "bot-ruyi"
 
@@ -25,11 +26,30 @@ class FrontDeskBot(Bot):
     """对外窗口：服务所有人，但输出受最严限制。"""
 
     def _handle_batch(self, msgs, sysp):
-        # serves 为空表示服务所有人。父类用 serves 白名单过滤，
-        # 这里把每个发送者都放进去。
+        # 【收发两侧都要动态放行】——2026-09-07 事故：只放行了收，没放行发。
+        #
+        # 原来这里只设 self.cfg["serves"]，而出口白名单是父类 __init__ 里
+        # 用 may_send_to（空）configure 过一次就冻住的，于是每条回复都被
+        # 自己的白名单拦下：日志刷「⛔ 出口白名单拦截：23 → 1」，
+        # 站长发了两句 hello 一条都没收到。
+        #
+        # 而 config.example.json 的注释一直写着「运行时按发送者动态放行」——
+        # **意图写下来了，另一半从没实现**，也没有任何东西会说。
         senders = {m["SenderId"] for m in msgs}
         self.cfg["serves"] = list(senders)
-        super()._handle_batch(msgs, sysp)
+
+        # 只放行「这一批里真的来找过它的人」。
+        # 不是放行所有人：绝不主动给未联系过的人发消息——
+        # 那是骚扰，也是注入被利用后最想做的事（见 README）。
+        outbound.configure({self.cfg["bot_id"]: set(senders)},
+                           api_base=self.cfg.get("api_base"))
+        try:
+            super()._handle_batch(msgs, sysp)
+        finally:
+            # 批次结束收回放行，回到默认拒绝。
+            # 不收回的话，两批之间若有别的代码路径想发消息，会带着上一批的授权。
+            outbound.configure({self.cfg["bot_id"]: set()},
+                               api_base=self.cfg.get("api_base"))
 
 
 def client_context(cfg):
