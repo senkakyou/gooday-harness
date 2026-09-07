@@ -56,6 +56,32 @@ check("失败被计数", f == 1)
 check("调用方收到了回执", len(got_receipt) == 1, got_receipt)
 check("认领已清理（不留僵尸）", not inbox.read_pending("demo"))
 
+print("\n=== 7. 处理完必须认领掉（2026-09-07 事故回归测试）===")
+# 事故：unread() 从不标已读（迁移期的影子模式保护活过了它该在的时期），
+# 每轮轮询都把同一条当新消息重答——站长一句「你好」被回了 14 条。
+# 心跳绿、服务 active、patrol 全绿，没有任何东西会说。
+marked = []
+inbox.process("demo2", {8: [{"Id": 11}, {"Id": 12}]},
+              lambda s, m: None, lambda s, e: None,
+              mark_read=lambda ids: marked.extend(ids))
+check("成功后标已读", marked == [11, 12], marked)
+
+marked2, receipts2 = [], []
+inbox.process("demo3", {9: [{"Id": 21}]},
+              lambda s, m: (_ for _ in ()).throw(RuntimeError("炸")),
+              lambda s, e: receipts2.append(s),
+              mark_read=lambda ids: marked2.extend(ids))
+check("【失败也要标】否则「处理异常」会一直刷屏",
+      marked2 == [21] and len(receipts2) == 1, (marked2, receipts2))
+
+# 反向：不传 mark_read 就是事故当时的行为 —— 消息永远留在未读里。
+# 这条断言在于证明【测试真的能分辨修没修】。
+seen = []
+for _ in range(3):
+    inbox.process("demo4", {10: [{"Id": 31}]},
+                  lambda s, m: seen.append(1), lambda s, e: None)
+check("不认领时同一条会被反复处理（事故形态可复现）", len(seen) == 3, seen)
+
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{'─'*44}\n通过 {ok} · 失败 {fail}")
 sys.exit(1 if fail else 0)

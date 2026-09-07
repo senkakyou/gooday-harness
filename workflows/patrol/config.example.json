@@ -103,5 +103,18 @@
   "evolution": {
     "_": "进化闭环巡检。max_age_hours 按闭环的实际跑动频率设，留余量",
     "max_age_hours": 26
+  },
+  "bot_inbox": {
+    "_": "bot 收件箱巡检。dup_limit 是「N 分钟内向同一人发 N 条」的告警线",
+    "bot_ids": [
+      20,
+      21,
+      22,
+      23,
+      24
+    ],
+    "max_unread_minutes": 15,
+    "dup_window_minutes": 10,
+    "dup_limit": 3
   }
 }

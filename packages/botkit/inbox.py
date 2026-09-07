@@ -78,14 +78,19 @@ def group_by_sender(rows, sender_key="SenderId"):
     return out
 
 
-def process(bot, groups, handler, on_error, *, task=None):
+def process(bot, groups, handler, on_error, *, task=None, mark_read=None):
     """逐个发送者处理。
 
     handler(sender_id, msgs) -> None
     on_error(sender_id, exc) -> None   【必须真的给发送者回执】
+    mark_read(ids)          -> None    【处理完必须标已读，否则无限重答】
 
     铁律 2：一个发送者出错不能拖垮整轮，而且【必须有回执】。
     这里强制走 on_error，就是为了让「静默吞掉」写不出来。
+
+    铁律 4（2026-09-07 事故后加）：**处理完必须认领掉，否则下一轮又是它。**
+    标已读放在 finally 里、且成功失败都标：失败那条已经发过回执了，
+    再答一遍只会刷屏。不标的后果实测过——一句「你好」被回了 14 条。
     """
     ok, failed = 0, 0
     for sender_id, msgs in groups.items():
@@ -108,4 +113,12 @@ def process(bot, groups, handler, on_error, *, task=None):
                 print(f"[{bot}] ⚠️ 给 {sender_id} 发回执也失败了: {e2}", flush=True)
         finally:
             resolve(bot, key)
+            # 【放在 finally】：成功要标，失败也要标。
+            # 失败分支已经通过 on_error 发了回执，不标的话下一轮会再答一次，
+            # 而且会一直答下去——那正是「⚠️ 处理异常」刷屏的形态。
+            if mark_read:
+                try:
+                    mark_read([m["Id"] for m in msgs if m.get("Id")])
+                except Exception as e:
+                    print(f"[{bot}] ⚠️ 标已读失败，下一轮会重复处理: {e}", flush=True)
     return ok, failed

@@ -83,7 +83,7 @@ class Bot:
 
     # ── 收件 ──────────────────────────────────────────────
     def unread(self):
-        """取未读。只读——迁移期绝不标已读，否则会把旧 bot 的活抢了。"""
+        """取未读。"""
         conn = sqlite3.connect(self.cfg["db"], timeout=10)
         conn.row_factory = sqlite3.Row
         try:
@@ -94,6 +94,49 @@ class Bot:
             return [dict(r) for r in rows]
         finally:
             conn.close()
+
+    def mark_read(self, ids):
+        """把这批消息标已读。
+
+        ═══ 这里出过一次真事故（2026-09-07）═══════════════════════
+
+        原来这个方法【不存在】，`unread()` 的注释写着
+        「只读——迁移期绝不标已读，否则会把旧 bot 的活抢了」。
+        那在影子模式下是对的：两套 bot 并存时抢标已读会把旧 bot 的活截胡。
+
+        但**迁移结束后没人关掉它**。旧 bot 早停了、这边已是生产模式，
+        于是每轮轮询（5 秒）都把同一条消息当新消息重答一次——
+        站长发一句「你好」，灵犀连回了 14 条。
+
+        而这段时间里：心跳绿的、服务 active、patrol 全绿、日志无异常。
+        **结构在、但没在起作用，且没有任何东西会说。**
+        区别只在于这次是「防护措施活过了它该在的时期，自己变成了故障」。
+
+        ═══ 时序：处理完之后才标 ═══════════════════════════════
+
+        处理【前】标 → 中途崩溃 = 消息静默丢失，用户永远等不到回复。
+        处理【后】标 → 中途崩溃 = 最多重复回一条（看得见、能补救）。
+        选后者：宁可重复一次，不可静默丢失。
+
+        只读模式仍然绝不标——那是影子模式的全部意义。
+        """
+        if self.readonly:
+            return                    # 影子模式：看得见，但不认领
+        if not ids:
+            return
+        try:
+            conn = sqlite3.connect(self.cfg["db"], timeout=10)
+            try:
+                conn.execute(
+                    "UPDATE PrivateMessages SET IsRead=1 WHERE Id IN "
+                    f"({','.join('?' * len(ids))})", list(ids))
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            # 【必须喊出来】：标不上就会重复应答同一条，正是上面那次事故。
+            # 静默失败在这里等于把故障重新装回去。
+            self.log(f"⚠️ 标已读失败（会导致重复回复！）ids={list(ids)[:5]}: {e}")
 
     def send(self, to, text):
         if self.readonly:
@@ -165,5 +208,5 @@ class Bot:
                 self.send(sender_id, msg)
 
             ok_n, fail_n = inbox.process(self.name, groups, handle, on_error,
-                                         task=task)
+                                         task=task, mark_read=self.mark_read)
             task.event("poll_done", "P3", {"ok": ok_n, "failed": fail_n})
