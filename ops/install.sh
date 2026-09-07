@@ -50,16 +50,35 @@ for dir in "$REPO"/services/*/; do
     echo "    gooday-harness-$name"
 done
 
-# ── 3. workflows/*/deploy/schedule.cron —— 汇总成唯一 crontab ──────────
-# G03 单一真源：不做增量合并。增量合并会让「实际在跑的」和「仓库里的」慢慢分叉。
-log "汇总 crontab"
+# ── 3. workflows/*/deploy/schedule.cron —— 只替换本项目的托管块 ────────
+#
+# ⚠️ 绝不整份替换 crontab。
+#
+# 路径可以加前缀隔离，但 **crontab / nginx / systemd 是共享命名空间**，
+# 隔离不了。2026-09-07 复核实测：整份替换会当场抹掉 root 现有的 11 个任务，
+# 其中包括 TLS 证书续期、数据库快照、巡检和四条内容产线——
+# 无备份、无确认、无提示，装完才发现整站在慢慢烂掉。
+#
+# 做法：用标记划出本项目的托管块，块外的行【原样保留】。
+# 这仍然满足 G03 单一真源——本项目管的那部分只有一个来源，
+# 别人的任务不归我们管，也不该被我们删。
+log "更新 crontab（只动本项目托管块）"
+BEGIN_MARK="# >>> gooday-harness managed block >>>"
+END_MARK="# <<< gooday-harness managed block <<<"
+
+CRON_BAK="/var/lib/gooday-harness/checkpoints/crontab-$(date +%Y%m%d-%H%M%S).bak"
+crontab -l > "$CRON_BAK" 2>/dev/null || true      # 先留回滚点（G07）
+echo "    已备份现有 crontab → $CRON_BAK"
+
 CRON_TMP="$(mktemp)"
+# 1) 保留托管块【以外】的全部内容
+crontab -l 2>/dev/null | sed "\|^${BEGIN_MARK}\$|,\|^${END_MARK}\$|d" > "$CRON_TMP" || true
+# 2) 追加本项目的托管块
 {
-    echo "# 本文件由 ops/install.sh 从 workflows/*/deploy/schedule.cron 自动汇总。"
-    echo "# 【不要手工编辑】——改动会在下次 install 时被覆盖。要改就改产线目录里那份。"
+    echo "$BEGIN_MARK"
+    echo "# 由 ops/install.sh 从 workflows/*/deploy/schedule.cron 汇总，勿手工编辑。"
     echo "SHELL=/bin/bash"
     echo "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-    echo
     for dir in "$REPO"/workflows/*/; do
         name="$(basename "$dir")"
         [[ "$name" == _* ]] && continue
@@ -67,12 +86,13 @@ CRON_TMP="$(mktemp)"
         [[ -f "$sched" ]] || continue
         echo "# ── $name ──"
         grep -v '^\s*#' "$sched" | grep -v '^\s*$' | sed "s/{{NAME}}/$name/g"
-        echo
-        install -d -m 755 "/var/lib/gooday-harness/state/$name" "/srv/gooday-harness/media/$name"
+        install -d -m 755 "/var/lib/gooday-harness/state/$name" \
+                          "/srv/gooday-harness/media/$name"
     done
-} > "$CRON_TMP"
+    echo "$END_MARK"
+} >> "$CRON_TMP"
 crontab "$CRON_TMP" && rm -f "$CRON_TMP"
-echo "    已整份替换"
+echo "    托管块已更新，块外任务原样保留"
 
 # ── 4. ops/nginx/* —— 通配扫描 ─────────────────────────────────────────
 log "安装 nginx 配置"

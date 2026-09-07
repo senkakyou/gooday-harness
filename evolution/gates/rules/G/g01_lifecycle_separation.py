@@ -30,9 +30,16 @@ ALLOW = (
 
 
 def check(ctx):
+    if not ctx.git_available():
+        # 【不许静默放行】：git 用不了 ≠ 没有问题。以 root 跑时的 dubious ownership
+        # 会让本规则扫 0 个文件却显示通过——门禁在最该起作用的时刻（部署）失灵。
+        yield ("ERROR", f"git 不可用，本规则无法检查：{ctx.git_error() or '未知原因'}",
+               "若是 dubious ownership，跑 "
+               "git config --global --add safe.directory <仓库路径> 后重试")
+        return
     tracked = ctx.tracked()
     if not tracked:
-        yield ("SKIP", "不是 git 仓库或无跟踪文件，跳过", "")
+        yield ("WARN", "git 可用但无跟踪文件（新仓库？）", "确认这是预期状态")
         return
 
     hits = {}

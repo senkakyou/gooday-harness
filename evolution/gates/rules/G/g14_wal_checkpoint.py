@@ -11,7 +11,10 @@ RULE = "G14"
 TITLE = "WAL checkpoint"
 
 # cp/rsync/install 一个 .db 文件
-COPY_DB = re.compile(r"\b(cp|rsync|install)\b[^\n|;]*\.db\b")
+COPY_DB = re.compile(
+    r"\b(cp|rsync|install)\b[^\n|;]*\.db\b"           # shell
+    r"|shutil\.(copy2?|copyfile)\s*\([^)]*\.db"        # python（原来漏了）
+)
 CHECKPOINT = re.compile(r"wal_checkpoint", re.I)
 
 

@@ -28,7 +28,14 @@ VOICE = re.compile(r"['\"](zh-[A-Z]{2}-\w+Neural)['\"]")
 
 
 def check(ctx):
-    for f in ctx.walk(".py", under="workflows"):
+    # 不能只扫 workflows/：音色常量一旦抽进 packages/ 或 services/ 就漏检。
+    # 但要排除规范与门禁自身——本规则的黑名单里就写着那两个死音色名，
+    # 不排除的话它会扫到自己然后报警（今晚第二次踩自指陷阱：
+    # 密钥扫描曾把检测器自己的正则当成命中）。
+    SELF = ("evolution/gates/", "policies/", "docs/")
+    for f in ctx.walk(".py"):
+        if ctx.rel(f).replace("\\", "/").startswith(SELF):
+            continue
         for i, line in enumerate(ctx.read(f).splitlines(), 1):
             for v in VOICE.findall(line):
                 if v in DEAD:

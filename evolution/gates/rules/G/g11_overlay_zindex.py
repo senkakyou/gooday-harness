@@ -20,6 +20,11 @@ ZI = re.compile(r"zIndex\s*:\s*(\d+)")
 
 
 def check(ctx):
+    # 目标不存在时必须明说。扫 0 个文件却静默通过，等于门禁在这一项上不存在——
+    # 这正是 policies 记录过的失败形态（对某种情况静默跳过，看起来一切正常）。
+    if not ctx.exists("services/web"):
+        yield ("SKIP", "services/web/ 不存在，本规则未生效", "迁入代码后此项才会真正检查")
+        return
     for f in ctx.walk(".jsx", ".tsx", under="services/web"):
         lines = ctx.read(f).splitlines()
         for i, line in enumerate(lines):

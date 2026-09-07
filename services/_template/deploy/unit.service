@@ -4,12 +4,18 @@
 # 新增服务不需要改 install.sh——它扫描 services/*/deploy/unit.service。
 
 [Unit]
-Description=Gooday {{NAME}}
+Description=Gooday Harness {{NAME}}
 After=network.target docker.service
+
+# 崩溃循环保护：5 分钟内重启 ≥5 次就进 failed，交巡检升级 P1，而不是无限重启空转烧钱。
+# ⚠️ 这两项【必须在 [Unit] 段】。写进 [Service] 时 systemd 会直接忽略并只在日志里
+# 留一句 warning——保护看起来配了，实际根本没生效（2026-09-07 复核实测）。
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/gooday
+WorkingDirectory=/opt/gooday-harness
 EnvironmentFile=/opt/gooday-harness/.env
 
 ExecStart=/usr/bin/python3 /opt/gooday-harness/services/{{NAME}}/main.py
@@ -23,11 +29,6 @@ StandardError=append:/var/log/gooday-harness/{{NAME}}.log
 # 配套：脚本致命错误必须 sys.exit(1)。
 Restart=always
 RestartSec=10
-
-# 崩溃循环保护：5 分钟内重启 ≥5 次就进 failed，交由巡检升级为 P1，
-# 而不是无限重启空转烧钱。
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # 单个服务失控不该拖垮整机（本机 2G）
 MemoryMax=600M

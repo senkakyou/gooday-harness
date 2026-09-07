@@ -58,9 +58,15 @@ def check(ctx):
         body = ctx.read(os.path.join(rel, "README.md"))
         if not body:
             continue
-        if not re.search(r"docs/decisions/\S+\.md", body):
+        m = re.search(r"(docs/decisions/\S+?\.md)", body)
+        if not m:
             yield ("ERROR", f"{rel} 没有关联 Decision",
                    "没有 Decision 的实验，结果无从解释——先写清楚为什么要改")
+        elif "NNN" in m.group(1) or not ctx.exists(*m.group(1).split("/")):
+            # 只查「写没写路径」是不够的：照抄模板里的占位 NNN-xxx.md 也能过。
+            # 门禁必须验那份 Decision 真的存在，否则这条规则只是在查排版。
+            yield ("ERROR", f"{rel} 关联的 Decision 不存在：{m.group(1)}",
+                   "占位符不算数。先在 docs/decisions/ 建出那份文档再跑实验")
         if not re.search(r"回滚|rollback|checkpoint", body, re.I):
             yield ("ERROR", f"{rel} 没写回滚点",
                    "实验必须能退回去。没演练过的回滚方案等于没有")

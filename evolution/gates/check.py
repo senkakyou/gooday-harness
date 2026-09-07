@@ -88,13 +88,39 @@ class Ctx:
         except ValueError:
             return p
 
+    # git 是否可用。None=还没试过；True/False=试过的结果；字符串=失败原因
+    _git_ok = None
+    _git_err = ""
+
     def git(self, *args):
         try:
             r = subprocess.run(["git", "-C", self.root, *args],
                                capture_output=True, text=True, timeout=30)
-            return r.stdout if r.returncode == 0 else ""
-        except Exception:
+            if r.returncode == 0:
+                return r.stdout
+            Ctx._git_err = (r.stderr or "").strip()[:200]
             return ""
+        except Exception as e:
+            Ctx._git_err = f"{type(e).__name__}: {e}"
+            return ""
+
+    def git_available(self):
+        """git 能不能用——【不能把"用不了"和"没有东西"混为一谈】。
+
+        2026-09-07 复核实测：以 root 跑本仓库时 git 报 dubious ownership，
+        原来的实现把任何 git 失败都吞成空字符串，于是 G01/G03 打印
+        「不是 git 仓库，跳过」然后放行——门禁全绿，实际一条都没查。
+        而部署入口正是 `sudo bash install.sh`，这恰恰是最需要检查的时刻。
+
+        这正是 policies G01/G05 自己写下的教训（对某种失败形态静默跳过，
+        看起来一切正常）。门禁不能犯它自己记录的错。
+        """
+        if Ctx._git_ok is None:
+            Ctx._git_ok = bool(self.git("rev-parse", "--git-dir").strip())
+        return Ctx._git_ok
+
+    def git_error(self):
+        return Ctx._git_err
 
     def tracked(self):
         return [l for l in self.git("ls-files").splitlines() if l]
