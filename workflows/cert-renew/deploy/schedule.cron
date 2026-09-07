@@ -1,4 +1,5 @@
 # runas: root
+# replaces: /opt/gooday/scripts/cert-renew-agent.sh
 # 每天 02:30 检查续期。与旧 cert-renew-agent（同样每日）错开点位。
 # 迁移期两者并存无害：certbot renew 是幂等的，<30 天才真续，先跑的续完后跑的空跑。
 30 2 * * * bash -c 'python3 /opt/gooday-harness/workflows/{{NAME}}/run.py' >> /var/log/gooday-harness/{{NAME}}.log 2>&1

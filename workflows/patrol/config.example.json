@@ -79,5 +79,7 @@
       "slow_query_sec": 3
     }
   ],
-  "_databases": "迁移期指向旧库；切换后改指向新库。只读探测，不给已吃紧的库加负担。"
+  "_databases": "迁移期指向旧库；切换后改指向新库。只读探测，不给已吃紧的库加负担。",
+  "repo": "/opt/gooday-harness",
+  "_repo": "读各 workflow 的 replaces 声明，检查迁移是否成对完成。"
 }

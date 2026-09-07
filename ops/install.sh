@@ -20,6 +20,23 @@ set -euo pipefail
 shopt -s nullglob
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# ── 0. 先确认装的是不是最新代码 ────────────────────────────────────────
+# 2026-09-07 真栽过：在开发副本提交推送后忘了同步部署副本，
+# install.sh 照常报告成功，装的却是三小时前的代码——
+# 「脚本没报错」和「装对了东西」是两回事（policies G08）。
+if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    git -C "$REPO" fetch -q origin 2>/dev/null || true
+    LOCAL="$(git -C "$REPO" rev-parse HEAD 2>/dev/null)"
+    REMOTE="$(git -C "$REPO" rev-parse '@{u}' 2>/dev/null || echo "$LOCAL")"
+    if [[ "$LOCAL" != "$REMOTE" ]]; then
+        echo "❌ 部署副本不是最新的："
+        echo "     本地 ${LOCAL:0:7} / 远端 ${REMOTE:0:7}"
+        echo "   先跑 git -C $REPO pull，否则你装的是旧代码。"
+        exit 1
+    fi
+    echo "==> 代码版本 ${LOCAL:0:7}（与远端一致）"
+fi
 SD=/etc/systemd/system
 log() { printf '==> %s\n' "$*"; }
 
