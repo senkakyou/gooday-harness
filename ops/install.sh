@@ -61,6 +61,14 @@ SERVICES=()
 for dir in "$REPO"/services/*/; do
     name="$(basename "$dir")"
     [[ "$name" == _* ]] && continue          # _template 不是成员
+    # 缺 config.json 就从 example 播种。
+    # ⚠️ 这段【曾只写在 workflows 循环里】，services 这边漏了（2026-09-07）——
+    #    结果 7 个服务全部以退出码 2 起不来，而 install.sh 报告成功。
+    #    G19 当时也只查 workflows，所以门禁没抓到。两处都补了。
+    if [[ -f "$dir/config.example.json" && ! -f "$dir/config.json" ]]; then
+        cp "$dir/config.example.json" "$dir/config.json"
+        echo "    ℹ️  $name：已播种 config.json，记得按本机改"
+    fi
     unit="$dir/deploy/unit.service"
     [[ -f "$unit" ]] || { echo "    ⚠️ $name 缺 deploy/unit.service，跳过"; continue; }
 
