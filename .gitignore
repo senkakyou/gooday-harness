@@ -1,0 +1,63 @@
+# G01 五类分离：状态、日志、产物、构建中间物一律不进版本库。
+# 它们的正式位置在仓库【外】——见 norms/00-index.md 的位置表：
+#   状态 /var/lib/gooday/state/   日志 /var/log/gooday/
+#   产物 /srv/gooday/media/       备份 /srv/gooday/backups/
+#
+# 这个文件只是第二道防线。第一道是「根本别放进来」，
+# 第三道是 checks/rules/g01_lifecycle_separation.py（会查已跟踪的文件）。
+
+# ── 构建中间物 ──
+__pycache__/
+*.py[cod]
+node_modules/
+.next/
+dist/
+build/
+bin/
+obj/
+*.egg-info/
+
+# ── 运行期状态（G01）──
+*.heartbeat
+.*-heartbeat
+*-state.json
+*-pending.json
+*.pid
+*.lock
+
+# ── 日志（G01）──
+*.log
+*.log.*
+
+# ── 数据库与产物（G01）──
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.mp3
+*.mp4
+*.wav
+*.m4a
+*.apk
+*.epub
+
+# ── 密钥（绝不进版本库）──
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.credentials.json
+
+# ── 手工备份：版本库本身就是干这个的（G03）──
+*.bak
+*.bak.*
+*~
+*.tmp
+
+# ── 编辑器 ──
+.DS_Store
+.vscode/
+.idea/
+*.swp
