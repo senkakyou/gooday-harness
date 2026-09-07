@@ -1,21 +1,24 @@
 {
   "_readme": "拷贝为 config.json。",
-
-  "mode": "readonly",
-  "_mode": "readonly=算出来但不发不写（迁移期必须用这个，旧 bot 仍在跑，两个财务同时对同一笔款入账是灾难）；active=真回复。",
-
+  "mode": "active",
+  "_mode": "readonly=算出来但不发不写（旧 bot 已停，可用 active，旧 bot 仍在跑，两个财务同时对同一笔款入账是灾难）；active=真回复。",
   "bot_id": 25,
-  "serves": [1],
+  "serves": [
+    1
+  ],
   "_serves": "只服务站长。其他人发来的消息直接忽略——不是不回，是根本不处理。",
-
-  "may_send_to": [1, 20],
+  "may_send_to": [
+    1,
+    20
+  ],
   "_may_send_to": "出口白名单：只能发站长和调度中心。默认拒绝，未登记即发不出去——这是结构性防线，即使被 prompt 注入说服也发不出。",
-
   "db": "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db",
   "_db": "迁移期读旧库。只读，绝不标已读——标了会把旧 bot 的活抢了。",
-
   "api_base": "https://localhost",
   "model": "opus",
   "poll_sec": 5,
-  "timeout_sec": 300
+  "timeout_sec": 300,
+  "username": "招财",
+  "role": "staff",
+  "_username": "签 JWT 用。必须与库里 Users.Username 一致。"
 }

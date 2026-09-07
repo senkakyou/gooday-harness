@@ -1,6 +1,6 @@
 {
   "_readme": "拷贝为 config.json。",
-  "mode": "readonly",
+  "mode": "active",
   "bot_id": 23,
   "serves": [],
   "_serves": "空 = 服务所有人。它是唯一对外窗口，必须能接任何注册用户的消息。",
@@ -12,5 +12,9 @@
   "api_base": "https://localhost",
   "model": "opus",
   "poll_sec": 3,
-  "timeout_sec": 300
+  "timeout_sec": 300,
+  "username": "如意",
+  "role": "staff",
+  "_username": "签 JWT 用。必须与库里 Users.Username 一致。",
+  "_mode": ""
 }

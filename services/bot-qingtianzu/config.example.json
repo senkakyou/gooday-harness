@@ -1,15 +1,25 @@
 {
   "_readme": "拷贝为 config.json。",
-  "mode": "readonly",
+  "mode": "active",
   "_mode": "readonly=算出来但不发不写（迁移期必须），active=真回复。",
   "bot_id": 21,
-  "serves": [1, 20, 23],
+  "serves": [
+    1,
+    20,
+    23
+  ],
   "_serves": "站长、调度中心、前台（如意可向它发工单通知）。其他人的消息根本不处理。",
-  "may_send_to": [1, 20],
+  "may_send_to": [
+    1,
+    20
+  ],
   "_may_send_to": "出口白名单：只能发站长与调度中心。【不接触客户】——对外只有一个窗口。默认拒绝。",
   "db": "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db",
   "api_base": "https://localhost",
   "model": "opus",
   "poll_sec": 5,
-  "timeout_sec": 300
+  "timeout_sec": 300,
+  "username": "擎天柱",
+  "role": "staff",
+  "_username": "签 JWT 用。必须与库里 Users.Username 一致。"
 }

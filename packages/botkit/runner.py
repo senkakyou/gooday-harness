@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
 
 from trace import Task                                    # noqa: E402
 import model as mdl                                       # noqa: E402
+import auth                                               # noqa: E402
 import outbound                                           # noqa: E402
 import inbox                                              # noqa: E402
 
@@ -43,6 +44,15 @@ class Bot:
 
         outbound.configure({self.cfg["bot_id"]: set(self.cfg.get("may_send_to", []))},
                            api_base=self.cfg.get("api_base"))
+
+        # token_provider 只在真要发消息时才需要。只读模式下不构造——
+        # 那样即使 .env 缺失也能跑起来观察，不会因为一个用不到的依赖而起不来。
+        self._token = None
+        if not self.readonly:
+            self._token = auth.provider(self.cfg["bot_id"],
+                                        self.cfg.get("username", str(self.cfg["bot_id"])),
+                                        self.cfg.get("role", "staff"),
+                                        self.cfg["db"])
 
     # ── 基础 ──────────────────────────────────────────────
     def log(self, msg):
@@ -89,10 +99,11 @@ class Bot:
         if self.readonly:
             self.log(f"[只读] 对 {to} 本应发送：{text[:80]}")
             return False
+        if self._token is None:
+            self.log(f"⚠️ 无 token_provider，发送中止（→{to}）")
+            return False
         return outbound.send(self.cfg["bot_id"], to, text,
-                             token_provider=self.cfg.get("_token_provider",
-                                                         lambda _f: ""),
-                             tag=self.name)[0]
+                             token_provider=self._token, tag=self.name)[0]
 
     # ── 主循环 ────────────────────────────────────────────
     def run(self):
