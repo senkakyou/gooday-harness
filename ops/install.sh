@@ -156,6 +156,39 @@ for who in "${!CRON_BY_USER[@]}"; do
     echo "    [$who] 托管块已更新，块外任务原样保留"
 done
 
+# ── 3.5 ops/docker/.env 软链 —— 让默认的 compose 命令就是对的 ──────────
+#
+# 2026-09-07 真事故：compose 里写着 `Jwt__Secret=${JWT_SECRET}`，
+# 密钥在仓库根的 .env，而 compose 的【变量插值】只读项目目录（ops/docker/）
+# 下的 .env 和 shell 环境 —— **不读 `env_file:` 那一项**。
+# 两个机制名字像、作用完全不同：env_file 是把变量送进容器，
+# ${VAR} 是 compose 自己在解析期展开。
+#
+# 结果：不带 --env-file 跑一次 `docker compose up -d api`，
+# ${JWT_SECRET} 空展开成 `Jwt__Secret=`，**容器状态 running、日志没红**，
+# 但每个请求都 500（IDX10703: key length is zero）。整站挂掉。
+#
+# 靠「记得加 --env-file」是不行的——没人记得住，而且它没写在任何地方。
+# 建个软链让默认命令就对：**正确的用法必须是最省事的用法**。
+log "链接 compose 环境文件（让 docker compose 默认就能取到密钥）"
+if [[ -f "$REPO/.env" ]]; then
+    ln -sfn "$REPO/.env" "$REPO/ops/docker/.env"
+    echo "    ops/docker/.env → $REPO/.env"
+    # 验证插值真的成立，不只是软链建成了（延续「验证生效不验证写入」）
+    if command -v docker >/dev/null 2>&1; then
+        miss="$(cd "$REPO/ops/docker" && docker compose config 2>/dev/null \
+                | grep -oP '(?<=Jwt__Secret: )\S*' || true)"
+        if [[ -z "$miss" ]]; then
+            echo "    ⚠️ docker compose config 里 Jwt__Secret 仍是空 —— 密钥不会传进容器，"
+            echo "       起来之后每个请求都会 500。先检查 $REPO/.env 里有没有 JWT_SECRET"
+        else
+            echo "    ✅ 插值验证通过（Jwt__Secret 非空）"
+        fi
+    fi
+else
+    echo "    ⚠️ $REPO/.env 不存在，跳过。api 起来后会因缺密钥而每个请求 500"
+fi
+
 # ── 4. ops/nginx/* —— 装进本项目自己的目录，并【验证真的会被读到】 ──────
 #
 # ⚠️ 别想当然往 /etc/nginx/conf.d 写。
