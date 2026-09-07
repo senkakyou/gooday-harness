@@ -62,6 +62,22 @@
       "port": 443,
       "sni": "www.gooday.ltd",
       "warn_days": 7
+    },
+    {
+      "name": "xray-555",
+      "port": 555,
+      "sni": "www.gooday.ltd",
+      "warn_days": 7
     }
-  ]
+  ],
+  "databases": [
+    {
+      "name": "gooday",
+      "path": "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db",
+      "sanity_table": "Users",
+      "sanity_min_rows": 1,
+      "slow_query_sec": 3
+    }
+  ],
+  "_databases": "迁移期指向旧库；切换后改指向新库。只读探测，不给已吃紧的库加负担。"
 }
