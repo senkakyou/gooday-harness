@@ -1,0 +1,4 @@
+# runas: root
+# COO 业务巡检，每 5 分钟。错开 patrol（2-59/5）跑在 :00,:05... 避免同时争数据库。
+# 只查工单流业务；基础设施（服务/心跳/快照/库健康/证书/凭据）由 workflows/patrol 负责。
+0-59/5 * * * * bash -c 'set -a; source /opt/gooday-harness/.env 2>/dev/null; set +a; python3 /opt/gooday-harness/workflows/{{NAME}}/run.py' >> /var/log/gooday-harness/{{NAME}}.log 2>&1

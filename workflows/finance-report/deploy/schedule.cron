@@ -1,0 +1,3 @@
+# runas: root
+# 月度财务报表，每月 1 号 09:30（按日志 09-01 09:30 推定）。
+30 9 1 * * bash -c 'set -a; source /opt/gooday-harness/.env 2>/dev/null; set +a; python3 /opt/gooday-harness/workflows/{{NAME}}/run.py' >> /var/log/gooday-harness/{{NAME}}.log 2>&1

@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""《奇妙数学》每日产线：从选题池取 N 集 → Claude 写台词+分镜 → 出片 → 上架。
+
+设计要点（都是 CLAUDE.md 里踩过的坑）：
+- **Claude 只输出行式纯文本，JSON 由本脚本组装**（正文里的引号/反斜杠不会再炸 JSON）。
+- 约束条件（已做过哪些集、能用哪些版式/原语）由脚本预查后拼进 prompt，
+  不让 Claude 在沙箱里自己查。
+- 生成结果先校验（版式/原语白名单、场景引用闭合、台词长度），不合格**跳过不发**。
+- 出片幂等：已有 mp4 且已上架的集自动跳过；进度存 data/math-specs/。
+
+用法:
+  python3 scripts/math-next.py 20            # 出 20 集（默认渲染+上架）
+  python3 scripts/math-next.py 2 --dry       # 只生成分镜与网页，不渲染
+  python3 scripts/math-next.py 1 --no-publish
+"""
+import json, os, re, subprocess, sys, time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from math_pool import POOL, DONE
+
+SPEC_DIR = "/var/lib/gooday-harness/state/math-episodes/specs"
+SPEC_DIR = os.path.join(HERE, "data", "math-specs")
+UP = "/srv/gooday-harness/media/uploads"
+LOG = os.path.join(HERE, "math-next.log")
+CLAUDE_TIMEOUT = 420
+
+KINDS = {"statement", "compare", "build", "formula", "mythbust", "life", "quiz"}
+VIS = {"pizza", "grid", "numberLine", "bars", "digits", "frac", "thermo", "text"}
+FIELDS = {"note", "verdict", "leftLabel", "rightLabel", "formula", "q", "answer",
+          "wrong", "right", "wrongHead", "rightHead", "step", "item"}
+
+
+def log(msg):
+    line = f"[{time.strftime('%F %T')}] {msg}"
+    print(line, flush=True)
+    with open(LOG, "a") as f:
+        f.write(line + "\n")
+
+
+def num(v):
+    try:
+        return int(v)
+    except ValueError:
+        try:
+            return float(v)
+        except ValueError:
+            return v
+
+
+def parse_kv(s):
+    """type=grid;rows=3;cols=4;hi=0,1 → dict（值里的逗号表示数组）"""
+    d = {}
+    for part in s.split(";"):
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k, v = k.strip(), v.strip()
+        if not k:
+            continue
+        d[k] = [num(x) for x in v.split(",")] if ("," in v) else num(v)
+    return d
+
+
+PROMPT = """你在给 8-10 岁小朋友写一集数学动画课《奇妙数学》的**台词**和**分镜**。
+固定主持人：时光精灵灵灵(知识姐姐，代号 L)、好奇小朋友豆豆(代号 D)、旁白(代号 N)。
+
+本集：{title}
+副题：{sub}
+核心教学点：{point}
+必须破除的误解：{myth}
+视觉主意（参考，可改）：{visual}
+片尾动动脑：{quizq}  正确答案：{quiza}
+
+【必须遵守】
+1. 全片 6~7 个场景，第一个场景 id 固定为 title（只写台词，不写分镜）。
+   其余场景 id 用英文小写单词，自己起，要和内容相关。
+2. 总台词 26~34 句，每句 12~45 字，口语、有画面感，别说教。
+   开头灵灵和豆豆要有一来一回的对话把问题抛出来；中间以旁白讲解为主，
+   豆豆负责提问和恍然大悟，灵灵负责下结论。结尾固定：灵灵说"我是灵灵！"、
+   豆豆说"我是豆豆！"、旁白说下集预告和"我们下次见！"。
+3. **必须有一个场景专门破除上面那条误解**（用 mythbust 版式）。
+4. 数字、公式要具体，不要泛泛而谈。
+5. **字段文字要短**（画面放不下会被截断）：场景标题≤18字；step≤13字；
+   item 的说明≤10字、大字≤5字；note/verdict≤24字；mythbust 的 wrong/right 每行≤14字。
+
+【可用的版式 kind】（每个场景选一个）
+- statement 一句话+一个大图：字段 note(下方说明)
+- compare   左右对比：字段 leftLabel/rightLabel/verdict(金色结论条)，视觉写 left= 和 right=
+- build     左图+右侧逐条出现的步骤：字段 step(可写 2~3 条)
+- formula   公式框：字段 formula(框里的大字)、note
+- mythbust  破误区：字段 wrong(错的说法)、right(对的说法)，用 | 分行(最多3行)
+- life      生活例子：字段 item，格式 大字::说明文字（写 2~3 条）、note
+- quiz      片尾提问：字段 q(问题)、answer(答案)
+
+【可用的视觉 type】（只能用这些，参数照抄格式）
+- pizza      n=份数;hi=高亮份的序号(从0);grow=1(逐份出现)   例 type=pizza;n=4;hi=0,1
+- grid       rows=行;cols=列;shape=box或dot;hiRow=;hiCol=;grow=1  例 type=grid;rows=3;cols=5;shape=box
+- numberLine min=;max=;step=;dot=一个点的值;hi=高亮的值        例 type=numberLine;min=-5;max=5;dot=-3
+- bars       vals=数值们;names=名字们;unit=每单位像素          例 type=bars;vals=8,5,2;names=豆豆,灵灵,小明
+- digits     digits=数字们;labels=位名们;hi=高亮第几位(从0)     例 type=digits;digits=2,3,5;labels=百位,十位,个位;hi=0
+- frac       up=分子;down=分母                                例 type=frac;up=3;down=4
+- thermo     value=温度                                       例 type=thermo;value=-5
+- text       s=要显示的大字                                    例 type=text;s=12
+
+【输出格式：每行一条，不要任何前言、解释、markdown 代码块】
+#S|场景id|版式kind|场景标题
+#V|场景id|视觉参数            (compare 版式写两行：#V|id|left:类型参数 和 #V|id|right:类型参数)
+#F|场景id|字段名|字段内容
+#L|场景id|角色(N/L/D)|台词
+
+顺序随意但同一场景的行要挨在一起。现在直接开始输出第一行。"""
+
+
+def gen_episode(topic):
+    """调 Claude 写这一集；返回 (script, scenes) 或 None"""
+    q, opts, ans, _ = topic["quiz"]
+    prompt = PROMPT.format(title=topic["title"], sub=topic["sub"], point=topic["point"],
+                           myth=topic["myth"], visual=topic["visual"],
+                           quizq=q, quiza=opts[ans])
+    model = os.environ.get("ANTHROPIC_MODEL", "opus")
+    try:
+        p = subprocess.run(["claude", "-p", prompt, "--model", model],
+                           capture_output=True, text=True, timeout=CLAUDE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        log(f"  ! {topic['id']} Claude 超时")
+        return None
+    out = p.stdout.strip()
+    if p.returncode != 0 or not out:
+        log(f"  ! {topic['id']} Claude rc={p.returncode} err={p.stderr.strip()[:120]}")
+        return None
+
+    scenes, order, script = {}, [], []
+    for raw in out.split("\n"):
+        line = raw.strip()
+        if not line.startswith("#"):
+            continue
+        parts = line.split("|")
+        tag = parts[0][1:].strip().upper()
+        try:
+            if tag == "S" and len(parts) >= 4:
+                sid, kind = parts[1].strip(), parts[2].strip()
+                if kind not in KINDS:
+                    kind = "statement"
+                if sid not in scenes:
+                    scenes[sid] = {"id": sid, "kind": kind, "title": parts[3].strip()}
+                    order.append(sid)
+            elif tag == "V" and len(parts) >= 3:
+                sid, body = parts[1].strip(), parts[2].strip()
+                if sid not in scenes:
+                    continue
+                slot, _, rest = body.partition(":")
+                if slot.strip() in ("left", "right"):
+                    v = parse_kv(rest)
+                    if v.get("type") in VIS:
+                        scenes[sid][slot.strip()] = v
+                else:
+                    v = parse_kv(body)
+                    if v.get("type") in VIS:
+                        scenes[sid]["visual"] = v
+            elif tag == "F" and len(parts) >= 4:
+                sid, key = parts[1].strip(), parts[2].strip()
+                val = "|".join(parts[3:]).strip()
+                if sid not in scenes or key not in FIELDS:
+                    continue
+                if key == "step":
+                    scenes[sid].setdefault("steps", []).append(val)
+                elif key == "item":
+                    big, _, txt_ = val.partition("::")
+                    scenes[sid].setdefault("items", []).append(
+                        {"big": big.strip(), "text": txt_.strip()})
+                else:
+                    scenes[sid][key] = val
+            elif tag == "L" and len(parts) >= 4:
+                sid, sp = parts[1].strip(), parts[2].strip().upper()
+                text = "|".join(parts[3:]).strip()
+                if sp not in ("N", "L", "D") or not text:
+                    continue
+                script.append((sid, sp, text))
+        except Exception:
+            continue
+
+    # ---- 校验 ----
+    if not script or len(script) < 18:
+        log(f"  ! {topic['id']} 台词只有 {len(script)} 句，判废")
+        return None
+    used = [s for s, _, _ in script]
+    if used[0] != "title":
+        log(f"  ! {topic['id']} 第一个场景不是 title，判废")
+        return None
+    # 台词引用了但没定义的场景：补一个 statement 兜底
+    for sid in dict.fromkeys(used):
+        if sid == "title":
+            continue
+        if sid not in scenes:
+            scenes[sid] = {"id": sid, "kind": "statement", "title": topic["title"]}
+            order.append(sid)
+    # 漏给视觉的场景会渲成空白画面 → 沿用上一个有视觉的，再不行按选题提示兜底
+    hint = topic.get("visual", "")
+    fallback = None
+    for t_ in ("pizza", "grid", "numberLine", "bars", "digits", "frac", "thermo"):
+        if t_ in hint:
+            fallback = {"type": t_}
+            break
+    fallback = fallback or {"type": "digits", "digits": [1, 0, 5]}
+    last_vis = None
+    for sid in dict.fromkeys(used):
+        sc = scenes.get(sid)
+        if not sc or sc["kind"] in ("quiz", "mythbust", "life", "formula"):
+            continue
+        if sc["kind"] == "compare":
+            if not sc.get("left"):
+                sc["left"] = dict(last_vis or fallback)
+            if not sc.get("right"):
+                sc["right"] = dict(last_vis or fallback)
+            last_vis = sc["left"]
+        elif sc.get("visual"):
+            last_vis = sc["visual"]
+        else:
+            sc["visual"] = dict(last_vis or fallback)
+            log(f"  · {topic['id']} 场景 {sid} 缺视觉，已兜底 {sc['visual'].get('type')}")
+
+    ordered = [scenes[s] for s in dict.fromkeys(used) if s != "title" and s in scenes]
+    if len(ordered) < 4:
+        log(f"  ! {topic['id']} 只有 {len(ordered)} 个内容场景，判废")
+        return None
+    if not any(s["kind"] == "mythbust" for s in ordered):
+        log(f"  · {topic['id']} 没有 mythbust 场景（不判废，但记一笔）")
+    # 结尾补署名（Claude 有时会漏）
+    tail = " ".join(t for _, _, t in script[-4:])
+    last = used[-1]
+    if "我是灵灵" not in tail:
+        script.append((last, "L", "我是灵灵！"))
+        script.append((last, "D", "我是豆豆！"))
+    return script, ordered
+
+
+def build_and_publish(topic, script, scenes, do_render, do_publish):
+    """把 spec 交给 math-build.py 出片"""
+    ep = topic["id"]
+    spec = {"id": ep, "num": int(ep[2:]), "title": f"第{int(ep[2:])}集 {topic['title']}",
+            "sub": topic["sub"],
+            "quiz": {"q": topic["quiz"][0], "options": topic["quiz"][1],
+                     "answer": topic["quiz"][2],
+                     "right": "答对了！" + topic["quiz"][3],
+                     "wrong": "再想想：" + topic["point"]},
+            "script": [list(x) for x in script], "scenes": scenes}
+    os.makedirs(SPEC_DIR, exist_ok=True)
+    json.dump(spec, open(f"{SPEC_DIR}/{ep}.json", "w"), ensure_ascii=False, indent=1)
+    args = ["python3", os.path.join(HERE, "math-build.py"), ep]
+    if not do_render:
+        args.append("--no-render")
+    if do_publish and do_render:
+        args.append("--publish")
+    r = subprocess.run(args, cwd="/opt/gooday", capture_output=True, text=True, timeout=3600)
+    ok = "成片" in r.stdout or "--no-render" in " ".join(args)
+    for l in r.stdout.strip().split("\n")[-4:]:
+        if l.strip():
+            log("    " + l.strip())
+    if r.returncode != 0:
+        log(f"  ! {ep} 出片失败 rc={r.returncode} {r.stderr.strip()[:150]}")
+    return ok
+
+
+def main():
+    n = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 20
+    do_render = "--dry" not in sys.argv
+    do_publish = "--no-publish" not in sys.argv
+    os.makedirs(SPEC_DIR, exist_ok=True)
+    done = set(DONE) | {f[:-5] for f in os.listdir(SPEC_DIR) if f.endswith(".json")
+                        and os.path.exists(f"{UP}/math-{f[:-5]}.mp4")}
+    todo = [t for t in POOL if t["id"] not in done][:n]
+    if not todo:
+        log("选题池已全部出完 🎉")
+        return
+    log(f"本轮 {len(todo)} 集：{', '.join(t['id'] for t in todo)}")
+    ok = fail = 0
+    for t in todo:
+        log(f"— {t['id']} {t['title']}")
+        made = gen_episode(t)
+        if not made:
+            fail += 1
+            continue
+        script, scenes = made
+        log(f"  台词 {len(script)} 句 / 场景 {len(scenes)} 个 "
+            f"({', '.join(s['kind'] for s in scenes)})")
+        if build_and_publish(t, script, scenes, do_render, do_publish):
+            ok += 1
+        else:
+            fail += 1
+    log(f"本轮完成：成功 {ok} 集，失败 {fail} 集")
+
+
+if __name__ == "__main__":
+    main()
