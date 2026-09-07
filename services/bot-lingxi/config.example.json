@@ -1,0 +1,16 @@
+{
+  "_readme": "拷贝为 config.json。",
+  "mode": "readonly",
+  "bot_id": 20,
+  "serves": [1],
+  "_serves": "【只服务站长】。这不是礼貌问题——是「谁能驱动一个有 shell 的角色」的问题。",
+  "may_send_to": [1],
+  "_may_send_to": "只能发站长。它不接触客户、也不直接指挥其他角色。默认拒绝。",
+  "allowed_tools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
+  "_allowed_tools": "工具权限走配置不写死在代码里：不同环境该给的权限不同，而且改权限应该是一次可 review 的配置变更。收紧时把不需要的删掉即可。注意 WebFetch/WebSearch 已默认移除——它们会把外部不可信内容直接引入一个有 Bash 的会话。",
+  "db": "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db",
+  "api_base": "https://localhost",
+  "model": "opus",
+  "poll_sec": 3,
+  "timeout_sec": 600
+}

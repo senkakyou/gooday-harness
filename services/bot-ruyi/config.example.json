@@ -1,0 +1,16 @@
+{
+  "_readme": "拷贝为 config.json。",
+  "mode": "readonly",
+  "bot_id": 23,
+  "serves": [],
+  "_serves": "空 = 服务所有人。它是唯一对外窗口，必须能接任何注册用户的消息。",
+  "may_send_to": [],
+  "_may_send_to": "【运行时按发送者动态放行，只回复来找它的那个人】。绝不主动给未联系过的人发消息——那是骚扰，也是注入被利用后最想做的事。",
+  "allowed_tools": [],
+  "_allowed_tools": "【一个工具都不给】。它读的每句话都不可信，给工具等于把注入直接变成执行。",
+  "db": "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db",
+  "api_base": "https://localhost",
+  "model": "opus",
+  "poll_sec": 3,
+  "timeout_sec": 300
+}
