@@ -32,12 +32,12 @@
 
 | 留痕 | 是什么 | 落在哪 |
 |---|---|---|
-| **Task** | 这次要干什么 | `/var/lib/gooday/tasks/` |
-| **Event** | 过程中发生了什么 | `/var/lib/gooday/events/` |
-| **Evidence** | 凭什么这么判（日志片段、指标、样本） | `/var/lib/gooday/evidence/` |
-| **Evaluation** | 打了几分、为什么 | `/var/lib/gooday/evaluations/` |
+| **Task** | 这次要干什么 | `/var/lib/gooday-harness/tasks/` |
+| **Event** | 过程中发生了什么 | `/var/lib/gooday-harness/events/` |
+| **Evidence** | 凭什么这么判（日志片段、指标、样本） | `/var/lib/gooday-harness/evidence/` |
+| **Evaluation** | 打了几分、为什么 | `/var/lib/gooday-harness/evaluations/` |
 | **Decision** | 决定改什么、谁批的 | `docs/decisions/`（进版本库） |
-| **Checkpoint** | 改之前的可回滚点 | `/var/lib/gooday/checkpoints/` |
+| **Checkpoint** | 改之前的可回滚点 | `/var/lib/gooday-harness/checkpoints/` |
 
 > 今晚（2026-09-07）踩的每一个坑都是"发生了但没留痕"：
 > 凭据 8/25 就失效了，没人知道；drop-in 装上了但脚本没记，重装即丢；

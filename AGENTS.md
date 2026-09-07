@@ -1,4 +1,4 @@
-# Gooday · Agent 作业入口
+# Gooday Harness · Agent 作业入口
 
 > 本文件是**索引，不是手册**。上限 150 行（policies/H01）。
 > 细节全在 `policies/`，别往这里堆——它一膨胀，分层就失效了。
@@ -14,8 +14,8 @@
 
 ```
 ┌─ 第一层：执行循环 ──────────────────────────────────────────┐
-│ services/<名>/     长驻进程。README.md · main.py · deploy/  │
-│ workflows/<名>/    业务流程。README.md · run.py  · deploy/  │
+│ services/<名>/    README.md · main.py · deploy/unit.service  │
+│ workflows/<名>/   README.md · run.py  · deploy/schedule.cron │
 │ packages/<名>/     跨模块共用库（被 ≥2 处用到才建）          │
 └─────────────────────────────────────────────────────────────┘
                         │ Result + Evidence
@@ -36,8 +36,8 @@ examples/           可分发示例    content/  创作源
 **仓库外**（policies G01，不进 git）：
 
 ```
-/var/lib/gooday/  state/ tasks/ events/ evidence/ evaluations/ checkpoints/
-/var/log/gooday/  日志          /srv/gooday/  media/ 产物 · backups/ 备份
+/var/lib/gooday-harness/  state/ tasks/ events/ evidence/ evaluations/ checkpoints/
+/var/log/gooday-harness/  日志          /srv/gooday-harness/  media/ 产物 · backups/ 备份
 ```
 
 ## 新增一个东西

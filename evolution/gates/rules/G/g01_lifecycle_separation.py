@@ -15,11 +15,11 @@ TITLE = "五类分离"
 
 # 类别 -> (匹配规则, 该去哪)
 MISPLACED = [
-    ("日志", re.compile(r"\.log$|\.log\.\d+$"), "/var/log/gooday/"),
+    ("日志", re.compile(r"\.log$|\.log\.\d+$"), "/var/log/gooday-harness/"),
     ("运行期状态", re.compile(r"(^|/)\.?[\w-]*(heartbeat|-state\.json|-pending\.json|\.pid)$"),
-     "/var/lib/gooday/state/"),
-    ("数据库", re.compile(r"\.(db|db-wal|db-shm|sqlite3?)$"), "/srv/gooday/backups/ 或运行期卷"),
-    ("媒体产物", re.compile(r"\.(mp3|mp4|wav|m4a|apk|zip|epub|iso)$"), "/srv/gooday/media/"),
+     "/var/lib/gooday-harness/state/"),
+    ("数据库", re.compile(r"\.(db|db-wal|db-shm|sqlite3?)$"), "/srv/gooday-harness/backups/ 或运行期卷"),
+    ("媒体产物", re.compile(r"\.(mp3|mp4|wav|m4a|apk|zip|epub|iso)$"), "/srv/gooday-harness/media/"),
     ("手工备份", re.compile(r"\.bak(\.\d+)?$|~$|\.tmp$"), "版本库本身就是干这个的（见 G03）"),
 ]
 

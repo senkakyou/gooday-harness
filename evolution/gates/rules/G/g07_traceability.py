@@ -39,7 +39,7 @@ def check(ctx):
 
     # 1) 安装脚本必须创建全部留痕目录，否则第一次跑就无处可写
     if install:
-        missing = [d for d in RUNTIME_DIRS if f"/var/lib/gooday/{d}" not in install]
+        missing = [d for d in RUNTIME_DIRS if f"/var/lib/gooday-harness/{d}" not in install]
         if missing:
             yield ("ERROR",
                    f"ops/install.sh 未创建留痕目录：{'、'.join(missing)}",

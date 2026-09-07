@@ -16,9 +16,9 @@
 
 - 库：`packages/tts` 等
 - 外部服务：edge-tts / 某 API
-- **产物写哪**：`/srv/gooday/media/<名字>/`（G01，绝不写进本目录或版本库）
-- **进度/状态写哪**：`/var/lib/gooday/state/<名字>/`
-- **日志写哪**：`/var/log/gooday/<名字>.log`
+- **产物写哪**：`/srv/gooday-harness/media/<名字>/`（G01，绝不写进本目录或版本库）
+- **进度/状态写哪**：`/var/lib/gooday-harness/state/<名字>/`
+- **日志写哪**：`/var/log/gooday-harness/<名字>.log`
 
 ## 判据
 
@@ -35,7 +35,7 @@
 **这条必须写。** 说明什么现象算这条线死了、谁会发现、怎么发现。
 
 - 判活看**产物 mtime**，不看日志——日志会骗人（权限警告顶掉真因，只剩 rc=1）。
-- 例：`/srv/gooday/media/<名字>/` 最新文件超 48 小时未更新 = 停摆。
+- 例：`/srv/gooday-harness/media/<名字>/` 最新文件超 48 小时未更新 = 停摆。
 
 ## 演练
 

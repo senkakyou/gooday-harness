@@ -27,8 +27,8 @@ log() { printf '==> %s\n' "$*"; }
 # 状态、日志、产物、备份一律在仓库外。先建，否则服务启动即失败。
 log "创建仓库外目录"
 # state=服务状态；tasks/events/evidence/evaluations/checkpoints=第二层循环的证据链（G07）
-install -d -m 755 /var/lib/gooday/{state,tasks,events,evidence,evaluations,checkpoints} \
-                  /var/log/gooday /srv/gooday/media /srv/gooday/backups
+install -d -m 755 /var/lib/gooday-harness/{state,tasks,events,evidence,evaluations,checkpoints} \
+                  /var/log/gooday-harness /srv/gooday-harness/media /srv/gooday-harness/backups
 
 # ── 2. services/*/deploy —— 通配扫描 ───────────────────────────────────
 log "安装服务单元"
@@ -39,15 +39,15 @@ for dir in "$REPO"/services/*/; do
     unit="$dir/deploy/unit.service"
     [[ -f "$unit" ]] || { echo "    ⚠️ $name 缺 deploy/unit.service，跳过"; continue; }
 
-    sed "s/{{NAME}}/$name/g" "$unit" > "$SD/gooday-$name.service"
-    SERVICES+=("gooday-$name")
-    install -d -m 755 "/var/lib/gooday/state/$name"
+    sed "s/{{NAME}}/$name/g" "$unit" > "$SD/gooday-harness-$name.service"
+    SERVICES+=("gooday-harness-$name")
+    install -d -m 755 "/var/lib/gooday-harness/state/$name"
 
     # 该服务自带的 drop-in（可选，同样通配）
     for conf in "$dir"/deploy/*.conf; do
-        install -m 644 -D "$conf" "$SD/gooday-$name.service.d/$(basename "$conf")"
+        install -m 644 -D "$conf" "$SD/gooday-harness-$name.service.d/$(basename "$conf")"
     done
-    echo "    gooday-$name"
+    echo "    gooday-harness-$name"
 done
 
 # ── 3. workflows/*/deploy/schedule.cron —— 汇总成唯一 crontab ──────────
@@ -68,7 +68,7 @@ CRON_TMP="$(mktemp)"
         echo "# ── $name ──"
         grep -v '^\s*#' "$sched" | grep -v '^\s*$' | sed "s/{{NAME}}/$name/g"
         echo
-        install -d -m 755 "/var/lib/gooday/state/$name" "/srv/gooday/media/$name"
+        install -d -m 755 "/var/lib/gooday-harness/state/$name" "/srv/gooday-harness/media/$name"
     done
 } > "$CRON_TMP"
 crontab "$CRON_TMP" && rm -f "$CRON_TMP"
@@ -94,16 +94,16 @@ cat <<'EOF'
 
 ==> 装完了。以下必须逐项实验证，别只看脚本没报错：
 
-  systemctl is-active gooday-<名字>                 # 每个服务
+  systemctl is-active gooday-harness-<名字>                 # 每个服务
   crontab -l | head -3                              # 期望 SHELL=/bin/bash
-  ls /var/lib/gooday/state /var/log/gooday          # 期望存在
+  ls /var/lib/gooday-harness/state /var/log/gooday-harness          # 期望存在
 
   ⚠️ 新增 cron 后【等一个执行周期，确认日志文件真的出现】。
      crontab -l 显示正常不算数——cron 默认 dash 没有 source，
      整行会静默失败且连日志都不生成。
 
   ⚠️ 改过服务代码的，确认【进程启动时间晚于代码 mtime】：
-     ps -o lstart= -p $(systemctl show -p MainPID --value gooday-<名字>)
+     ps -o lstart= -p $(systemctl show -p MainPID --value gooday-harness-<名字>)
      否则你验的是旧代码。
 
   ⚠️ 大模型凭据是全线单点：所有 bot 共用同一份。

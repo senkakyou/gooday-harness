@@ -49,10 +49,10 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 | 代码 | `services/` `pipelines/` `packages/` `checks/` | ✅ |
 | 配置 | 随服务/产线走（`*/deploy/`）+ 全局 `ops/` | ✅ |
 | 规范 | `policies/` `docs/` | ✅ |
-| **状态** | `/var/lib/gooday/state/` | ❌ 可重建 |
-| **日志** | `/var/log/gooday/` | ❌ 滚动 |
-| **产物** | `/srv/gooday/media/` | ❌ 体积大 |
-| **备份** | `/srv/gooday/backups/` | ❌ 运行期数据 |
+| **状态** | `/var/lib/gooday-harness/state/` | ❌ 可重建 |
+| **日志** | `/var/log/gooday-harness/` | ❌ 滚动 |
+| **产物** | `/srv/gooday-harness/media/` | ❌ 体积大 |
+| **备份** | `/srv/gooday-harness/backups/` | ❌ 运行期数据 |
 
 > 教训：上一版把心跳文件、`*-state.json`、22 个日志、1.2G 媒体、580M 数据库快照
 > 全塞在代码目录和版本库里。`.git` 涨到 491M，`scripts/` 平铺 100 个文件，
@@ -137,12 +137,12 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 
 | 留痕 | 落在哪 |
 |---|---|
-| **Task** 这次要干什么 | `/var/lib/gooday/tasks/` |
-| **Event** 过程中发生了什么 | `/var/lib/gooday/events/` |
-| **Evidence** 凭什么这么判 | `/var/lib/gooday/evidence/` |
-| **Evaluation** 打了几分、为什么 | `/var/lib/gooday/evaluations/` |
+| **Task** 这次要干什么 | `/var/lib/gooday-harness/tasks/` |
+| **Event** 过程中发生了什么 | `/var/lib/gooday-harness/events/` |
+| **Evidence** 凭什么这么判 | `/var/lib/gooday-harness/evidence/` |
+| **Evaluation** 打了几分、为什么 | `/var/lib/gooday-harness/evaluations/` |
 | **Decision** 决定改什么、谁批的 | `docs/decisions/`（**进版本库**） |
-| **Checkpoint** 改之前的可回滚点 | `/var/lib/gooday/checkpoints/` |
+| **Checkpoint** 改之前的可回滚点 | `/var/lib/gooday-harness/checkpoints/` |
 
 配套：每个实验必须关联一个 Decision 并写明回滚点；
 每个评价器必须说明 Evidence 来源——没有证据的评价是拍脑袋，

@@ -21,8 +21,8 @@
 
 - 库：`packages/xxx`
 - 外部：数据库 / 某 API / 某文件
-- **状态写哪**：`/var/lib/gooday/state/<名字>/`（G01，不许写进本目录）
-- **日志写哪**：`/var/log/gooday/<名字>.log`（G01）
+- **状态写哪**：`/var/lib/gooday-harness/state/<名字>/`（G01，不许写进本目录）
+- **日志写哪**：`/var/log/gooday-harness/<名字>.log`（G01）
 
 ## 判据
 

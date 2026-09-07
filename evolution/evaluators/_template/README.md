@@ -30,7 +30,7 @@
 
 ## 输出
 
-一条 Evaluation，落到 `/var/lib/gooday/evaluations/`：
+一条 Evaluation，落到 `/var/lib/gooday-harness/evaluations/`：
 
 ```json
 {
@@ -38,7 +38,7 @@
   "score": 0.0,
   "verdict": "fail",
   "reasons": ["具体原因，不是'质量不好'"],
-  "evidence_refs": ["/var/lib/gooday/evidence/xxx"],
+  "evidence_refs": ["/var/lib/gooday-harness/evidence/xxx"],
   "at": "2026-09-07T04:00:00Z"
 }
 ```

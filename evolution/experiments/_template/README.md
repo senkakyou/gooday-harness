@@ -34,7 +34,7 @@
 
 ## 失败怎么办
 
-- 回滚点在哪：`/var/lib/gooday/checkpoints/<名字>/`
+- 回滚点在哪：`/var/lib/gooday-harness/checkpoints/<名字>/`
 - 回滚命令：
 - **回滚必须演练过**——没演练过的回滚方案等于没有
 

@@ -10,13 +10,13 @@ After=network.target docker.service
 [Service]
 Type=simple
 WorkingDirectory=/opt/gooday
-EnvironmentFile=/opt/gooday/.env
+EnvironmentFile=/opt/gooday-harness/.env
 
-ExecStart=/usr/bin/python3 /opt/gooday/services/{{NAME}}/main.py
+ExecStart=/usr/bin/python3 /opt/gooday-harness/services/{{NAME}}/main.py
 
 # G01：日志不落进代码目录
-StandardOutput=append:/var/log/gooday/{{NAME}}.log
-StandardError=append:/var/log/gooday/{{NAME}}.log
+StandardOutput=append:/var/log/gooday-harness/{{NAME}}.log
+StandardError=append:/var/log/gooday-harness/{{NAME}}.log
 
 # Restart=always 而非 on-failure：
 # on-failure 时脚本"正常"退出(return 0)会让服务静静躺平，不重启也不告警。

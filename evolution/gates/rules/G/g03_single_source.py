@@ -61,7 +61,7 @@ def check(ctx):
     for f in tracked:
         base = os.path.basename(f)
         # 模板化的文件名本来就该重复，是结构的一部分，不算副本
-        if base in ("README.md", "__init__.py", ".gitkeep", "AGENTS.md",
+        if base in ("README.md", "__init__.py", ".gitkeep", "AGENTS.md", "_template.md",
                     "unit.service", "schedule.cron", "main.py", "run.py"):
             continue
         by_name[base].append(f)

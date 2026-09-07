@@ -14,4 +14,4 @@
 # ⚠️ 装完必须等一个执行周期，确认日志文件【真的出现】。crontab -l 正常不算数。
 
 # 每天 09:00 出片
-0 9 * * * bash -c 'set -a; source /opt/gooday/.env; set +a; python3 /opt/gooday/pipelines/{{NAME}}/run.py' >> /var/log/gooday/{{NAME}}.log 2>&1
+0 9 * * * bash -c 'set -a; source /opt/gooday-harness/.env; set +a; python3 /opt/gooday-harness/pipelines/{{NAME}}/run.py' >> /var/log/gooday-harness/{{NAME}}.log 2>&1
