@@ -58,16 +58,24 @@ def check(ctx):
                     yield ("ERROR", f"{point}/{name}/ 缺 {r}",
                            f"照 {point}/_template/ 补齐；缺了它装不上或没人知道它算不算成功")
 
-            # services 的成员必须【二选一】有明确的部署方式，
-            # 否则它装不上而没人知道
+            # services 的成员必须【三选一】有明确的部署方式，否则它装不上而没人知道。
+            # 三类是迁真实系统时逐个撞出来的，不是先设计好的：
+            #   · systemd 服务   → deploy/unit.service      （六个 bot）
+            #   · 容器服务       → 被 ops/docker/ 编排       （api）
+            #   · 构建期成员     → deploy/build.sh           （web：没有进程，
+            #     产物打进别的成员的静态目录）
+            # 前端迁入时才发现第三类：它确实是 services 成员、确实要"部署"，
+            # 但既没有进程也不进 compose。
             if point == "services":
                 has_unit = ctx.exists(point, name, "deploy", "unit.service")
                 in_compose = name in ctx.read("ops/docker/docker-compose.yml")
-                if not has_unit and not in_compose:
-                    yield ("ERROR", f"{point}/{name}/ 既没有 unit.service "
-                                    f"也不在 ops/docker/ 的 compose 里",
-                           "服务必须有明确的部署方式：systemd 单元，"
-                           "或被 compose 编排。两者都没有 = 它永远装不上")
+                has_build = ctx.exists(point, name, "deploy", "build.sh")
+                if not (has_unit or in_compose or has_build):
+                    yield ("ERROR", f"{point}/{name}/ 没有任何部署方式",
+                           "服务必须三选一：deploy/unit.service（systemd）、"
+                           "被 ops/docker/ 的 compose 编排（容器）、"
+                           "或 deploy/build.sh（构建期成员）。"
+                           "都没有 = 它永远装不上")
 
     # 3) 反向：部署配置不得散落在扩展点之外
     #    服务的 unit 必须待在自己服务目录里，不能回到全局 ops/
