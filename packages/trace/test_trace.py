@@ -8,6 +8,7 @@
 成功、失败留痕、异常不被吞、写不进去时不连累调用方、原子写。
 """
 import json
+import glob
 import os
 import shutil
 import sys
@@ -111,5 +112,36 @@ check("没有残留 .tmp 文件", not leftovers, leftovers)
 check("每个 Task 文件都是合法 JSON", all(isinstance(x, dict) for x in tasks()))
 
 shutil.rmtree(TMP, ignore_errors=True)
+print("\n=== 新建事件文件对「另一个身份」也可写（2026-09-08 事故）===")
+# 当天第一个写的人决定属主，而 root cron 与 agent cron 都在写。
+# 只 chmod 664 不够：root 建的是 root:root，非 root 身份不在该组，组写位无效。
+import os as _os
+_d = tempfile.mkdtemp()
+_os.environ["GOODAY_HARNESS_STATE"] = _d
+import importlib as _il
+_il.reload(T)
+with T.Task("perm", actor="t") as _t:
+    _t.event("x", "P3", {})
+_f = glob.glob(_os.path.join(_d, "events", "*.jsonl"))[0]
+check("新建事件文件是 0664", oct(_os.stat(_f).st_mode & 0o777) == "0o664",
+      oct(_os.stat(_f).st_mode & 0o777))
+
+# root 路径：伪装 geteuid=0，验证它会把属主交给目录属主
+_real_geteuid, _real_chown = _os.geteuid, _os.chown
+_chowned = []
+_os.geteuid = lambda: 0
+_os.chown = lambda p, u, g: _chowned.append((p, u, g))
+try:
+    _os.unlink(_f)
+    with T.Task("perm2", actor="t") as _t:
+        _t.event("y", "P3", {})
+finally:
+    _os.geteuid, _os.chown = _real_geteuid, _real_chown
+_dir_stat = _os.stat(_os.path.dirname(_f))
+check("以 root 建文件时会 chown 给目录属主（只 chmod 不够）",
+      _chowned and _chowned[-1][1:] == (_dir_stat.st_uid, _dir_stat.st_gid),
+      _chowned)
+shutil.rmtree(_d, ignore_errors=True)
+
 print(f"\n{'─'*46}\n通过 {ok} · 失败 {fail}")
 sys.exit(1 if fail else 0)

@@ -32,11 +32,23 @@ def run(cfg):
     if w is False:
         import time as _t
         f = _t.strftime("%Y-%m-%d") + ".jsonl"
+        import time as _t2
+        _p = os.path.join(os.environ.get("GOODAY_HARNESS_STATE",
+                                         "/var/lib/gooday-harness"),
+                          "events", _t2.strftime("%Y-%m-%d") + ".jsonl")
+        try:
+            _st = os.stat(_p)
+            _own = f"uid={_st.st_uid} gid={_st.st_gid} mode={oct(_st.st_mode & 0o777)}"
+        except OSError:
+            _own = "（读不到属主）"
         yield {"level": "P0", "what": f"当天事件文件 {f} 当前身份写不动",
-               "why": "当天第一个写的人决定文件权限，而 root cron 与 agent cron 都在写。"
-                      "写不动 = 这一整天的证据链丢失，**而系统看起来一切正常**",
-               "fix": "sudo chmod 664 <事件文件>；根治已在 packages/trace 里"
-                      "（新建时即放开同组写），但已存在的旧文件要手工改一次",
+               "why": f"{_own}。当天第一个写的人决定属主，而 root cron 与 agent cron "
+                      "都在写。**只 chmod 不够**——root 建的是 root:root，"
+                      "非 root 身份不在该组，组写位无效。"
+                      "写不动 = 这一整天的证据链丢失，而系统看起来一切正常",
+               "fix": f"sudo chown $(stat -c %U:%G $(dirname {_p})) {_p}；"
+                      "根治已在 packages/trace（root 建文件时交还给目录属主），"
+                      "但已存在的旧文件要手工改一次",
                "action": None}
 
     for c in cfg.get("credentials", []):

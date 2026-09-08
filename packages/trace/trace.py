@@ -56,6 +56,35 @@ FAILURE_MARK = os.path.join(ROOT, ".trace-failure")
 LEVELS = ("P0", "P1", "P2", "P3")
 
 
+def _share(path):
+    """让新建的文件对【所有会写它的身份】都可写。
+
+    ═══ 只 chmod 是不够的（2026-09-08 亲手栽的）═══════════════════
+
+    当天第一个写事件的人决定这个文件的属主与权限，而写它的身份不止一个：
+    root 的 cron 和 agent 的 cron 都在写。
+
+    第一版我只做了 `chmod 664`，以为够了 —— **不够**。
+    root 建出来的文件是 `root:root`，而 agent 不在 root 组里，
+    组写位对它毫无意义。实测：chmod 之后 agent 依然 PermissionError。
+    「权限位看起来对了」和「那个身份真能写」是两回事。
+
+    正确做法是把属主交给目录属主 —— 目录归谁，当天的文件就归谁；
+    root 无论如何都写得动，所以只需照顾非 root 那一侧。
+    """
+    try:
+        os.chmod(path, 0o664)
+    except OSError:
+        pass
+    if os.geteuid() != 0:
+        return                        # 非 root 建的，本来就是自己的
+    try:
+        st = os.stat(os.path.dirname(path))
+        os.chown(path, st.st_uid, st.st_gid)
+    except OSError:
+        pass                          # 改不动不该让写事件本身失败
+
+
 def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -134,10 +163,7 @@ class Task:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             if new:
-                try:
-                    os.chmod(path, 0o664)
-                except OSError:
-                    pass          # 改不动权限不该让写事件本身失败
+                _share(path)
         except Exception as e:
             _degrade("Event", e)
         return rec
