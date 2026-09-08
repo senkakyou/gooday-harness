@@ -175,6 +175,32 @@ _ctp.Mappings[".z03"] = "application/octet-stream";
 // 走「下载并唤起安装器」，给成 octet-stream 有些机型只会当普通文件存下来。
 _ctp.Mappings[".apk"] = "application/vnd.android.package-archive";
 app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = _ctp });
+
+// ---- uploads 老链接兜底：文件搬家后，站外的旧地址 301 到新地址 ----
+// 站内引用（工具字段、论坛帖子、页面内部引用）在搬家时已被 RewriteReferences 改掉，
+// 但用户收藏夹里的、别处贴过的、搜索引擎收录的地址改不了。
+// 【没有这一段它们不会 404，而是落到下面的 MapFallbackToFile 拿到 200 的 index.html】——
+// 那更糟：下载下来是个 HTML 首页，用户只会以为文件坏了。
+// 位置必须在 UseStaticFiles 之后：文件真在时静态中间件已经返回，走不到这里。
+app.Use(async (ctx, next) => {
+    var p = ctx.Request.Path.Value ?? "";
+    if (p.StartsWith("/uploads/", StringComparison.OrdinalIgnoreCase)) {
+        var rel = Uri.UnescapeDataString(p["/uploads/".Length..]);
+        if (rel.Length > 0) {
+            var dbc = ctx.RequestServices.GetRequiredService<AppDbContext>();
+            var hit = await dbc.UploadRedirects.AsNoTracking()
+                .FirstOrDefaultAsync(r => r.OldPath == rel);
+            if (hit != null) {
+                // 目标路径按段转义：中文不转义也能用，但文件名里真有 % # ? 时地址会断
+                var target = "/uploads/" + string.Join('/', hit.NewPath.Split('/').Select(Uri.EscapeDataString));
+                ctx.Response.Redirect(target, permanent: true);
+                return;
+            }
+        }
+    }
+    await next();
+});
+
 if (app.Environment.IsDevelopment()) app.UseCors("dev");
 app.UseRateLimiter();
 app.UseAuthentication();                           // 解析 token，填充 User.Identity

@@ -498,6 +498,9 @@ namespace GoodayTools.Migrations
                     b.Property<string>("DownloadFileName")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Folder")
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("HasDownload")
                         .HasColumnType("INTEGER");
 
@@ -537,6 +540,19 @@ namespace GoodayTools.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("VideoDuration")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("VideoPlayCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("VideoSource")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("VideoUrl")
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("ViewCount")
                         .HasColumnType("INTEGER");
 
@@ -546,6 +562,31 @@ namespace GoodayTools.Migrations
                         .IsUnique();
 
                     b.ToTable("Tools");
+                });
+
+            modelBuilder.Entity("GoodayTools.Models.UploadRedirect", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NewPath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OldPath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OldPath")
+                        .IsUnique();
+
+                    b.ToTable("UploadRedirects");
                 });
 
             modelBuilder.Entity("GoodayTools.Models.ToolDownload", b =>

@@ -40,10 +40,22 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
     }
 
     // ToolDto：接收新增/编辑工具时前端发来的数据
+    // VideoPlayCount 故意不在里面——它是统计值，让编辑表单能写就等于随时可能被清零。
     public record ToolDto(string Name, string Slug, string Description, string Category,
         string IconEmoji, bool IsOnline, string? OnlineUrl, bool HasDownload,
         string? DownloadFileName, bool IsPublished, bool RequireLogin, string? ReadmeMarkdown,
-        bool IsPaid = false, decimal Price = 0);
+        bool IsPaid = false, decimal Price = 0,
+        string? VideoUrl = null, int VideoDuration = 0, string? Folder = null);
+
+    // 视频字段归一：VideoSource 不让前端自己填，从 URL 形态推出来。
+    // 让它可填，迟早出现「source=link 但 URL 是站内路径」这种自相矛盾的记录，
+    // 前端按 source 选播放器就会选错。
+    private static (string? Url, string Source) NormalizeVideo(string? url) {
+        var u = string.IsNullOrWhiteSpace(url) ? null : url.Trim();
+        if (u == null) return (null, "upload");
+        return (u, u.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || u.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? "link" : "upload");
+    }
 
     // GET /api/admin/tools —— 获取所有工具（含未发布的，管理员专用）
     [HttpGet("tools")]
@@ -56,11 +68,14 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         // slug 必须唯一（用作 URL 标识符）
         if (await db.Tools.AnyAsync(t => t.Slug==dto.Slug))
             return BadRequest(new { message="Slug已存在" });
+        var (vurl, vsrc) = NormalizeVideo(dto.VideoUrl);
+        if (NormalizeRelDir(dto.Folder, out var folder) is string ferr) return BadRequest(new { message=ferr });
         var tool = new Tool { Name=dto.Name,Slug=dto.Slug,Description=dto.Description,
             Category=dto.Category,IconEmoji=dto.IconEmoji,IsOnline=dto.IsOnline,
             OnlineUrl=dto.OnlineUrl,HasDownload=dto.HasDownload,DownloadFileName=dto.DownloadFileName,
             IsPublished=dto.IsPublished,RequireLogin=dto.RequireLogin,ReadmeMarkdown=dto.ReadmeMarkdown,
-            IsPaid=dto.IsPaid,Price=dto.Price };
+            IsPaid=dto.IsPaid,Price=dto.Price,
+            VideoUrl=vurl,VideoSource=vsrc,VideoDuration=Math.Max(0,dto.VideoDuration),Folder=folder };
         db.Tools.Add(tool);
         await db.SaveChangesAsync();
         return Ok(tool);
@@ -78,6 +93,10 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         tool.DownloadFileName=dto.DownloadFileName; tool.IsPublished=dto.IsPublished;
         tool.RequireLogin=dto.RequireLogin; tool.ReadmeMarkdown=dto.ReadmeMarkdown;
         tool.IsPaid=dto.IsPaid; tool.Price=dto.Price;
+        var (vurl, vsrc) = NormalizeVideo(dto.VideoUrl);
+        if (NormalizeRelDir(dto.Folder, out var folder) is string ferr) return BadRequest(new { message=ferr });
+        tool.VideoUrl=vurl; tool.VideoSource=vsrc;
+        tool.VideoDuration=Math.Max(0,dto.VideoDuration); tool.Folder=folder;
         tool.UpdatedAt=DateTime.UtcNow;
         await db.SaveChangesAsync();
         return Ok(tool);
@@ -110,30 +129,130 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         ".exe", ".msi", ".dmg", ".apk", ".deb", ".appimage",
     };
 
-    // POST /api/admin/upload —— 上传工具文件到 wwwroot/uploads/
+    // 视频讲解只收这两种：浏览器原生 <video> 能直接播、且 MIME 已在内置列表里。
+    // .mov/.mkv 故意不收——手机拍出来的 mov 很多浏览器播不了，让它转码后再传，
+    // 好过传上去才发现是个下载链接。
+    private static readonly HashSet<string> AllowedVideoExts =
+        new(StringComparer.OrdinalIgnoreCase) { ".mp4", ".webm" };
+
+    // Windows 保留设备名：将来工具包被解压到 Windows 上会直接失败，源头就挡住
+    private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase) {
+        "CON","PRN","AUX","NUL",
+        "COM1","COM2","COM3","COM4","COM5","COM6","COM7","COM8","COM9",
+        "LPT1","LPT2","LPT3","LPT4","LPT5","LPT6","LPT7","LPT8","LPT9",
+    };
+
+    // Unicode 归一化到 NFC。Mac 传来的中文名是分解形(NFD)，和 Linux 上的 NFC
+    // 【肉眼一模一样、字节不同】：不统一就会冒出两个"同名"文件夹，
+    // 引用一边对得上一边对不上，还极难看出来。
+    private static string NormalizeName(string s) =>
+        s.Normalize(System.Text.NormalizationForm.FormC).Trim();
+
+    // 【全站扫引用时的路径边界字符】。/uploads/xxx 的引用一律扫到这些字符为止，
+    // 所以名字里带了它们，引用就会被【从中间截断】：
+    // 后果不是"链接不好看"，而是 BuildFileUsageAsync 认不出这个文件被谁用着 →
+    // 它被列为空闲 → 「一键清理空闲文件」把它删了。名字里带空格就足够触发。
+    private const string RefBreakingChars = " \t\"'>)(][\\,;?#%";
+    // 文件系统层面不能要的
+    private const string FsBreakingChars  = "/\\:*?\"<>|";
+
+    // 校验单段文件名/文件夹名（中文合法）。返回 null=合法，否则返回中文原因。
+    private static string? ValidateSegment(string seg, string what) {
+        if (string.IsNullOrWhiteSpace(seg))       return $"{what}不能为空";
+        if (seg != seg.Trim())                    return $"{what}首尾不能有空格";
+        if (seg is "." or "..")                   return $"{what}非法";
+        if (seg.StartsWith('.'))                  return $"{what}不能以点开头（会变成隐藏文件）";
+        if (seg.EndsWith('.'))                    return $"{what}不能以点结尾";
+        foreach (var c in seg) {
+            if (char.IsControl(c))                return $"{what}不能包含控制字符";
+            if (FsBreakingChars.Contains(c))      return $"{what}不能包含 / \\ : * ? \" < > | 这些字符";
+            if (char.IsWhiteSpace(c))             return $"{what}不能包含空格（引用扫描以空白为边界，带空格的路径会被截断，文件会被误判成空闲而遭清理）";
+            if (RefBreakingChars.Contains(c))     return $"{what}不能包含 \" ' ( ) [ ] , ; ? # % 这些字符（同上，会截断引用）";
+        }
+        if (ReservedNames.Contains(Path.GetFileNameWithoutExtension(seg)))
+            return $"{what}用了系统保留名（CON/PRN/COM1…），解压到 Windows 会失败";
+        // 文件系统按【字节】限 255，一个中文 UTF-8 占 3 字节，60 字 = 180 字节，留足余量
+        if (seg.Length > 60)                      return $"{what}过长（最多 60 个字）";
+        return null;
+    }
+
+    // 校验并归一化「相对 uploads 的目录」，如 "tools/照片管家Pro"。
+    // 返回 null=合法（结果写进 clean，空目录=uploads 根，clean 为 ""），否则返回中文原因。
+    private static string? NormalizeRelDir(string? dir, out string clean) {
+        clean = "";
+        if (string.IsNullOrWhiteSpace(dir)) return null;
+        var raw = NormalizeName(dir).Replace('\\', '/').Trim('/');
+        if (raw.Length == 0) return null;
+        var segs = raw.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segs.Length > 3) return "目录层级最多 3 层";
+        foreach (var s in segs)
+            if (ValidateSegment(s, "文件夹名") is string err) return err;
+        clean = string.Join('/', segs);
+        return null;
+    }
+
+    // POST /api/admin/upload?dir=tools/照片管家Pro —— 上传文件到 uploads/<dir>/
+    // dir 省略时落在 uploads 根（老行为）。
+    // 【RequestSizeLimit 和 RequestFormLimits 必须成对】：只写前者的话 multipart
+    // 仍按默认 128MB 截断；而不写任何一个时 Kestrel 默认只给 ~28MB，
+    // 代码里"不能超过100MB"那句根本轮不到执行——请求早就被框架拒了。
     [HttpPost("upload")]
-    public async Task<IActionResult> UploadFile(IFormFile file) {
+    [RequestSizeLimit(100L * 1024 * 1024)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 100L * 1024 * 1024)]
+    public async Task<IActionResult> UploadFile(IFormFile file, [FromQuery] string? dir = null) {
         if (file.Length==0) return BadRequest(new { message="文件为空" });
         if (file.Length > 100*1024*1024) return BadRequest(new { message="不能超过100MB" });
 
-        var orig = Path.GetFileName(file.FileName);
+        var orig = NormalizeName(Path.GetFileName(file.FileName));
         var ext = Path.GetExtension(orig);
         if (string.IsNullOrEmpty(ext) || !AllowedUploadExts.Contains(ext))
             return BadRequest(new { message="不支持的文件类型" });
+        if (ValidateSegment(orig, "文件名") is string nerr) return BadRequest(new { message=nerr });
 
-        var dir = Path.Combine(env.WebRootPath, "uploads");
-        Directory.CreateDirectory(dir);  // 目录不存在则创建
+        return await SaveUploadAsync(file, dir, orig, ext);
+    }
+
+    // POST /api/admin/tools/video-upload?dir=tools/照片管家Pro —— 上传视频讲解
+    // 单开一个端点而不是复用 upload，是因为体积档次差一个量级：
+    // 讲解 8 分钟 1080p 轻松 200MB+，而给普通上传开到 500MB 等于给所有类型都开。
+    // nginx 侧也要对这个路径单独放宽（ops/nginx/conf.d/gooday.conf），否则 413 死在门口。
+    [HttpPost("tools/video-upload")]
+    [RequestSizeLimit(500L * 1024 * 1024)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 500L * 1024 * 1024)]
+    public async Task<IActionResult> UploadToolVideo(IFormFile file, [FromQuery] string? dir = null) {
+        if (file.Length==0) return BadRequest(new { message="文件为空" });
+        if (file.Length > 500L*1024*1024) return BadRequest(new { message="视频不能超过500MB" });
+
+        var orig = NormalizeName(Path.GetFileName(file.FileName));
+        var ext = Path.GetExtension(orig);
+        if (string.IsNullOrEmpty(ext) || !AllowedVideoExts.Contains(ext))
+            return BadRequest(new { message="视频只支持 mp4 / webm（其它格式请先转码）" });
+        if (ValidateSegment(orig, "文件名") is string nerr) return BadRequest(new { message=nerr });
+
+        return await SaveUploadAsync(file, dir, orig, ext);
+    }
+
+    // 落盘逻辑：两个上传端点共用。返回 { fileName, path, url, size }。
+    // path 是【相对 uploads 的完整路径】——工具的下载字段/视频字段要存的是它，
+    // 只回 fileName 的话文件在子目录里就找不到了。
+    private async Task<IActionResult> SaveUploadAsync(IFormFile file, string? dir, string orig, string ext) {
+        if (NormalizeRelDir(dir, out var relDir) is string derr) return BadRequest(new { message=derr });
+
+        var root = Path.Combine(env.WebRootPath, "uploads");
+        if (!TryResolveUnder(root, relDir, out var full)) return BadRequest(new { message="无效目录" });
+        Directory.CreateDirectory(full);
 
         var name = Path.GetFileNameWithoutExtension(orig);
         var fn = orig;
-
         // 同名文件已存在时，加时间戳后缀避免覆盖（如 tool_20240115120000.zip）
-        if (System.IO.File.Exists(Path.Combine(dir, fn)))
+        if (System.IO.File.Exists(Path.Combine(full, fn)))
             fn = $"{name}_{DateTime.UtcNow:yyyyMMddHHmmss}{ext}";
 
-        using var s = System.IO.File.Create(Path.Combine(dir, fn));
-        await file.CopyToAsync(s);
-        return Ok(new { fileName=fn, size=file.Length });
+        using (var s = System.IO.File.Create(Path.Combine(full, fn)))
+            await file.CopyToAsync(s);
+
+        var rel = string.IsNullOrEmpty(relDir) ? fn : $"{relDir}/{fn}";
+        return Ok(new { fileName=fn, path=rel, url="/uploads/"+rel, size=file.Length });
     }
 
     // 扫描所有引用 uploads/ 文件的来源，构建“相对路径→用途”和“文件名→用途”两张表。
@@ -157,13 +276,16 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
                 Add(byRel, Uri.UnescapeDataString(m.Groups[1].Value), label);
         }
 
-        // 工具：在线运行 URL（即工具本体 HTML）、说明文档内嵌图片、下载文件
+        // 工具：在线运行 URL（即工具本体 HTML）、说明文档内嵌图片、下载文件、视频讲解
         var tools = await db.Tools
-            .Select(t => new { t.Name, t.OnlineUrl, t.DownloadFileName, t.ReadmeMarkdown })
+            .Select(t => new { t.Name, t.OnlineUrl, t.DownloadFileName, t.ReadmeMarkdown, t.VideoUrl })
             .ToListAsync();
         foreach (var t in tools) {
             Scan(t.OnlineUrl, $"在线工具：{t.Name}");
             Scan(t.ReadmeMarkdown, $"工具说明：{t.Name}");
+            // 【视频讲解必须扫】：漏了它，讲解视频会被判成空闲文件，
+            // 后台「一键清理空闲文件」按一下就把所有讲解删光了。外链自动跳过（Scan 只匹配 /uploads）
+            Scan(t.VideoUrl, $"视频讲解：{t.Name}");
             if (!string.IsNullOrEmpty(t.DownloadFileName)) {
                 // DownloadFileName 可能是纯文件名（micrograd.zip）也可能带子目录（zip/micrograd.zip），
                 // 两种都登记：带子目录的按完整相对路径匹配（byRel），纯文件名按文件名匹配（byName）。
@@ -294,59 +416,98 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         return full == r || full.StartsWith(r + Path.DirectorySeparatorChar);
     }
 
-    // 把文本里 /uploads/oldRel 形式的引用替换为 /uploads/newRel（带分隔符边界，避免误伤前缀相同的其它文件）
-    private static string ReplaceUploadUrl(string text, string oldUrl, string newUrl) =>
-        Regex.Replace(text, Regex.Escape(oldUrl) + @"(?=[\s""'>)\]\\,;?#]|$)", newUrl.Replace("$", "$$"));
+    // uploads 引用的统一形态：/uploads/<路径>，路径到这些字符为止
+    // （和 BuildFileUsageAsync 的 Scan 保持同一套边界，否则"扫得到但改不着"）
+    private static readonly Regex UploadRefRe = new(@"/uploads/([^\s""'>)\]\\,;?#]+)", RegexOptions.Compiled);
 
-    // 文件改名/移动后，把数据库里（工具/二手/论坛）和 uploads 内静态文本文件里对该文件的引用全部更新，引用不断链。
-    private async Task RewriteReferencesAsync(string oldRel, string newRel) {
-        var oldUrl  = "/uploads/" + oldRel;
-        var newUrl  = "/uploads/" + newRel;
-        var oldName = Path.GetFileName(oldRel);
-        var newName = Path.GetFileName(newRel);
+    // 按映射表一次过重写文本里的所有 /uploads/ 引用。
+    // 【一次过、不逐条替换】：逐条替换时若映射里同时有 A→B 和 B→C，
+    // 第二条会把刚换成 B 的又推到 C，凭空搬错文件。单次扫描+查表没有这个问题。
+    private static string ApplyRefMap(string text, Dictionary<string,string> map) =>
+        UploadRefRe.Replace(text, m => {
+            var rel = Uri.UnescapeDataString(m.Groups[1].Value);
+            return map.TryGetValue(rel, out var nw) ? "/uploads/" + nw : m.Value;
+        });
 
-        var tools = await db.Tools.ToListAsync();
-        foreach (var t in tools) {
-            if (!string.IsNullOrEmpty(t.OnlineUrl))       t.OnlineUrl       = ReplaceUploadUrl(t.OnlineUrl!, oldUrl, newUrl);
-            if (!string.IsNullOrEmpty(t.ReadmeMarkdown))  t.ReadmeMarkdown  = ReplaceUploadUrl(t.ReadmeMarkdown!, oldUrl, newUrl);
-            if (!string.IsNullOrEmpty(t.Description))      t.Description      = ReplaceUploadUrl(t.Description!, oldUrl, newUrl);
+    // 文件改名/移动后，把数据库里和 uploads 内静态文本文件里对该文件的引用全部更新，引用不断链。
+    private Task RewriteReferencesAsync(string oldRel, string newRel) =>
+        RewriteReferencesBatchAsync(new[] { (oldRel, newRel) });
+
+    // 批量版：一次搬 N 个文件也只扫一遍数据库和一遍磁盘。
+    // 【必须是批量的】：归置 100 多个文件时逐个调用等于把全库全盘扫 100 多遍，
+    // 请求会卡在 nginx 的 150s proxy_read_timeout 上断掉，而文件已经搬了一半。
+    private async Task RewriteReferencesBatchAsync(IEnumerable<(string oldRel, string newRel)> pairs) {
+        var map = new Dictionary<string,string>(StringComparer.Ordinal);
+        foreach (var (o, n) in pairs) {
+            if (string.IsNullOrEmpty(o) || string.IsNullOrEmpty(n) || o == n) continue;
+            map[o] = n;
+        }
+        if (map.Count == 0) return;
+
+        // 纯文件名 → 新相对路径。工具的 DownloadFileName 历史上有"只存文件名"的写法，
+        // 同名文件出现在两个目录时无从分辨，这种歧义的一律不改（宁可漏改也不能改错）。
+        var byName = new Dictionary<string,string>(StringComparer.Ordinal);
+        var dupName = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (o, n) in map) {
+            var nm = Path.GetFileName(o);
+            if (!byName.TryAdd(nm, n)) dupName.Add(nm);
+        }
+        foreach (var d in dupName) byName.Remove(d);
+
+        string? Fix(string? s) => string.IsNullOrEmpty(s) ? s : ApplyRefMap(s!, map);
+
+        foreach (var t in await db.Tools.ToListAsync()) {
+            t.OnlineUrl      = Fix(t.OnlineUrl);
+            t.ReadmeMarkdown = Fix(t.ReadmeMarkdown);
+            t.Description    = Fix(t.Description) ?? t.Description;
+            t.VideoUrl       = Fix(t.VideoUrl);   // 漏了这行，移动视频文件 = 讲解按钮点开就是黑屏
             if (!string.IsNullOrEmpty(t.DownloadFileName)) {
                 var dl = t.DownloadFileName!.Replace('\\', '/').TrimStart('/');
-                if (dl == oldRel) t.DownloadFileName = newRel;          // 带子目录形式
-                else if (dl == oldName) t.DownloadFileName = newName;   // 纯文件名形式
+                if (map.TryGetValue(dl, out var nw)) t.DownloadFileName = nw;            // 带子目录形式
+                else if (byName.TryGetValue(dl, out var nw2)) t.DownloadFileName = nw2;  // 纯文件名形式 → 补成完整相对路径
+            }
+            // 归置后 Folder 跟着文件走：它指向的目录如果整体搬了，字段也要跟上
+            if (!string.IsNullOrEmpty(t.Folder)) {
+                foreach (var (o, n) in map) {
+                    var od = Path.GetDirectoryName(o)?.Replace('\\','/') ?? "";
+                    var nd = Path.GetDirectoryName(n)?.Replace('\\','/') ?? "";
+                    if (od.Length > 0 && t.Folder == od && nd.Length > 0) { t.Folder = nd; break; }
+                }
             }
         }
-        foreach (var i in await db.SecondhandItems.ToListAsync())
-            if (!string.IsNullOrEmpty(i.Images)) i.Images = ReplaceUploadUrl(i.Images!, oldUrl, newUrl);
-        foreach (var p in await db.ForumPosts.ToListAsync())
-            if (!string.IsNullOrEmpty(p.Content)) p.Content = ReplaceUploadUrl(p.Content!, oldUrl, newUrl);
+        foreach (var i in await db.SecondhandItems.ToListAsync()) i.Images = Fix(i.Images) ?? i.Images;
+        foreach (var p in await db.ForumPosts.ToListAsync())      p.Content = Fix(p.Content) ?? p.Content;
         // 听书：封面图、EPUB 文字版、各章节音频
         foreach (var b in await db.Audiobooks.ToListAsync()) {
-            if (!string.IsNullOrEmpty(b.CoverUrl)) b.CoverUrl = ReplaceUploadUrl(b.CoverUrl!, oldUrl, newUrl);
-            if (!string.IsNullOrEmpty(b.EpubUrl))  b.EpubUrl  = ReplaceUploadUrl(b.EpubUrl!, oldUrl, newUrl);
+            b.CoverUrl = Fix(b.CoverUrl) ?? b.CoverUrl;
+            b.EpubUrl  = Fix(b.EpubUrl)  ?? b.EpubUrl;
         }
         foreach (var c in await db.AudiobookChapters.ToListAsync())
-            if (!string.IsNullOrEmpty(c.MediaUrl)) c.MediaUrl = ReplaceUploadUrl(c.MediaUrl!, oldUrl, newUrl);
+            c.MediaUrl = Fix(c.MediaUrl) ?? c.MediaUrl;
         // 私信(交付物链接)、需求单附件、项目交付、工单、财务凭证——与 BuildFileUsageAsync 扫描面对齐，
         // 否则改名/移动这些文件会把客户下载链接改断
         foreach (var pm in await db.PrivateMessages.ToListAsync())
-            if (!string.IsNullOrEmpty(pm.Content)) pm.Content = ReplaceUploadUrl(pm.Content!, oldUrl, newUrl);
+            pm.Content = Fix(pm.Content) ?? pm.Content;
         foreach (var r in await db.DevRequests.ToListAsync()) {
-            if (!string.IsNullOrEmpty(r.Description)) r.Description = ReplaceUploadUrl(r.Description!, oldUrl, newUrl);
-            if (!string.IsNullOrEmpty(r.AdminNote))   r.AdminNote   = ReplaceUploadUrl(r.AdminNote!, oldUrl, newUrl);
+            r.Description = Fix(r.Description) ?? r.Description;
+            r.AdminNote   = Fix(r.AdminNote);
         }
         foreach (var pj in await db.Projects.ToListAsync()) {
-            if (!string.IsNullOrEmpty(pj.Description))   pj.Description   = ReplaceUploadUrl(pj.Description!, oldUrl, newUrl);
-            if (!string.IsNullOrEmpty(pj.PlanMarkdown))  pj.PlanMarkdown  = ReplaceUploadUrl(pj.PlanMarkdown!, oldUrl, newUrl);
-            if (!string.IsNullOrEmpty(pj.DeliveryNotes)) pj.DeliveryNotes = ReplaceUploadUrl(pj.DeliveryNotes!, oldUrl, newUrl);
-            if (!string.IsNullOrEmpty(pj.AdminNote))     pj.AdminNote     = ReplaceUploadUrl(pj.AdminNote!, oldUrl, newUrl);
+            pj.Description   = Fix(pj.Description) ?? pj.Description;
+            pj.PlanMarkdown  = Fix(pj.PlanMarkdown);
+            pj.DeliveryNotes = Fix(pj.DeliveryNotes);
+            pj.AdminNote     = Fix(pj.AdminNote);
         }
         foreach (var tk in await db.Tickets.ToListAsync()) {
-            if (!string.IsNullOrEmpty(tk.Description)) tk.Description = ReplaceUploadUrl(tk.Description!, oldUrl, newUrl);
-            if (!string.IsNullOrEmpty(tk.AdminNote))   tk.AdminNote   = ReplaceUploadUrl(tk.AdminNote!, oldUrl, newUrl);
+            tk.Description = Fix(tk.Description) ?? tk.Description;
+            tk.AdminNote   = Fix(tk.AdminNote);
         }
         foreach (var fr in await db.FinanceRecords.ToListAsync())
-            if (!string.IsNullOrEmpty(fr.EvidenceUrl)) fr.EvidenceUrl = ReplaceUploadUrl(fr.EvidenceUrl!, oldUrl, newUrl);
+            fr.EvidenceUrl = Fix(fr.EvidenceUrl);
+
+        // 旧路径→新路径映射：站内引用上面都改完了，站外的（收藏夹/别处贴的链接/搜索引擎）
+        // 改不了，靠这张表在 Program.cs 里 301 兜住
+        await RecordRedirectsAsync(map);
         await db.SaveChangesAsync();
 
         // uploads 内静态文本文件之间的内部引用（如页面引入共享库）
@@ -356,11 +517,36 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
                 { ".html", ".htm", ".css", ".js", ".json", ".md", ".svg" };
             foreach (var f in Directory.GetFiles(root, "*", SearchOption.AllDirectories)) {
                 if (!textExt.Contains(Path.GetExtension(f))) continue;
-                if (new FileInfo(f).Length > 2 * 1024 * 1024) continue;
+                if (new FileInfo(f).Length > 2 * 1024 * 1024) continue;  // 跳过过大文件
                 string content;
                 try { content = await System.IO.File.ReadAllTextAsync(f); } catch { continue; }
-                if (!content.Contains(oldUrl)) continue;
-                try { await System.IO.File.WriteAllTextAsync(f, ReplaceUploadUrl(content, oldUrl, newUrl)); } catch { }
+                if (!content.Contains("/uploads/")) continue;
+                var replaced = ApplyRefMap(content, map);
+                if (replaced == content) continue;
+                try { await System.IO.File.WriteAllTextAsync(f, replaced); } catch { }
+            }
+        }
+    }
+
+    // 记录/维护旧路径→新路径映射（不落 SaveChanges，由调用方一起提交）
+    private async Task RecordRedirectsAsync(Dictionary<string,string> map) {
+        var all = await db.UploadRedirects.ToListAsync();
+        foreach (var (oldRel, newRel) in map) {
+            // 连续搬家 A→B、之后 B→C：老的 A→B 必须直接改指 C，
+            // 否则老链接被 301 到一个已经不存在的 B，等于没兜住
+            foreach (var r in all.Where(r => r.NewPath == oldRel)) r.NewPath = newRel;
+
+            // 搬回原处：新路径上如果还挂着旧映射，会把这个文件自己的地址 301 到别处，
+            // 甚至和上面的改写凑成一个来回跳的循环
+            var loop = all.FirstOrDefault(r => r.OldPath == newRel);
+            if (loop != null) { db.UploadRedirects.Remove(loop); all.Remove(loop); }
+
+            var exist = all.FirstOrDefault(r => r.OldPath == oldRel);
+            if (exist != null) exist.NewPath = newRel;
+            else {
+                var add = new UploadRedirect { OldPath = oldRel, NewPath = newRel };
+                db.UploadRedirects.Add(add);
+                all.Add(add);
             }
         }
     }
@@ -375,9 +561,8 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         var root = Path.Combine(env.WebRootPath, "uploads");
         if (string.IsNullOrWhiteSpace(dto.path) || string.IsNullOrWhiteSpace(dto.newName))
             return BadRequest(new { message = "参数缺失" });
-        var newName = dto.newName.Trim();
-        if (newName.Contains('/') || newName.Contains('\\') || newName is "." or "..")
-            return BadRequest(new { message = "文件名不能包含路径分隔符" });
+        var newName = NormalizeName(dto.newName);
+        if (ValidateSegment(newName, "文件名") is string nerr) return BadRequest(new { message = nerr });
         if (!TryResolveUnder(root, dto.path, out var oldFull) || !System.IO.File.Exists(oldFull))
             return NotFound(new { message = "文件不存在" });
 
@@ -424,10 +609,8 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
     [HttpPost("files/folder")]
     public IActionResult CreateFolder([FromBody] CreateFolderDto dto) {
         var root = Path.Combine(env.WebRootPath, "uploads");
-        var rel = (dto.path ?? "").Replace('\\', '/').Trim().Trim('/');
+        if (NormalizeRelDir(dto.path, out var rel) is string derr) return BadRequest(new { message = derr });
         if (string.IsNullOrEmpty(rel)) return BadRequest(new { message = "文件夹名不能为空" });
-        foreach (var seg in rel.Split('/'))
-            if (seg is "" or "." or "..") return BadRequest(new { message = "非法文件夹名" });
         if (!TryResolveUnder(root, rel, out var full)) return BadRequest(new { message = "无效路径" });
         if (Directory.Exists(full) || System.IO.File.Exists(full))
             return BadRequest(new { message = "已存在同名文件夹或文件" });
@@ -534,6 +717,258 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
                      .OrderByDescending(x => x.Length))
             try { if (!Directory.EnumerateFileSystemEntries(d).Any()) Directory.Delete(d); } catch { }
         return Ok(new { dryRun = false, deleted, totalSize });
+    }
+
+    // ================= 一工具一文件夹：归置 =================
+    // 分两步走，【plan 只算不动，apply 只动不算】：
+    // apply 收的是一份明确的搬运清单，不是自己再算一遍——
+    // 这样人可以先看清单、手工调掉不合适的几条（比如那首粤语歌不该被改成工具名），
+    // 调完照单执行，执行的和审过的是同一份东西。
+
+    public record OrganizeMove(string From, string To);
+    public record OrganizeFolder(int ToolId, string Folder);
+    public record OrganizeApplyDto(OrganizeMove[] Moves, OrganizeFolder[] Folders);
+
+    // 把任意字符串削成合法的一段目录名/文件名（用于从工具名生成文件夹名）。
+    // 空格和 ()[]，;?#% 一律换成连字符——不是为了好看：
+    // 103 个工具里有 74 个名字带空格（"PDF 转换工具"），原样做目录名的话，
+    // 全站扫引用会在空格处断掉，这些文件会被当成没人用的空闲文件清理掉。
+    // 中文标点里当分隔符用的那些：留在目录名里只是难认（"照片量体-·-人体建模"），
+    // 一并压成连字符。注意【不动点号】——llama.cpp、Alpine.js 的点是名字的一部分
+    private const string CjkSeparatorChars = "·：、，。；！？（）【】《》“”‘’—…⇄↔→←";
+
+    private static string SanitizeSegment(string raw) {
+        var s = NormalizeName(raw ?? "");
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in s) {
+            if (char.IsControl(c)) continue;
+            if (char.IsWhiteSpace(c) || FsBreakingChars.Contains(c)
+                || RefBreakingChars.Contains(c) || CjkSeparatorChars.Contains(c))
+                sb.Append('-');
+            else sb.Append(c);
+        }
+        // 连续的连字符收成一个，首尾的去掉（"CSS Flexbox/Grid 可视化工具" → "CSS-Flexbox-Grid-可视化工具"）
+        var o = Regex.Replace(sb.ToString(), "-{2,}", "-").Trim('-').Trim().Trim('.').Trim('-').Trim();
+        if (o.Length > 60) {
+            // 别把代理对(emoji)从中间劈开——劈开就是个坏码位，落到文件名上更难查
+            var cut = 60;
+            if (char.IsHighSurrogate(o[cut - 1])) cut--;
+            o = o[..cut].Trim();
+        }
+        if (o.Length == 0) o = "未命名";
+        if (ReservedNames.Contains(Path.GetFileNameWithoutExtension(o))) o = "_" + o;
+        return o;
+    }
+
+    // 是不是站外地址。判 "://" 而不是 "http" 开头——后者会把 http-status.html
+    // 这类文件名误判成外链
+    private static bool IsExternal(string s) =>
+        s.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+        || s.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+        || s.StartsWith("//", StringComparison.Ordinal);
+
+    // 从一段文本里取出所有 /uploads/ 引用的相对路径
+    private static IEnumerable<string> RefsIn(string? text) {
+        if (string.IsNullOrEmpty(text)) yield break;
+        foreach (Match m in UploadRefRe.Matches(text!))
+            yield return Uri.UnescapeDataString(m.Groups[1].Value);
+    }
+
+    // GET /api/admin/tools/organize/plan?prefix=tools —— 干跑，只出方案不动任何文件
+    [HttpGet("tools/organize/plan")]
+    public async Task<IActionResult> OrganizePlan([FromQuery] string prefix = "tools") {
+        if (NormalizeRelDir(prefix, out var root0) is string perr) return BadRequest(new { message = perr });
+        var root = Path.Combine(env.WebRootPath, "uploads");
+
+        var tools = await db.Tools.OrderBy(t => t.Id).ToListAsync();
+
+        // 谁引用了哪些文件：被两个及以上工具引用的（共享库、公共资源）一律不搬——
+        // 搬进任何一个工具的文件夹都是错的，另一个工具的引用虽然会被改对，
+        // 但"这个文件属于谁"从此就说不清了
+        var refCount = new Dictionary<string,List<string>>(StringComparer.Ordinal);
+        foreach (var t in tools)
+            foreach (var r in ToolRefs(t).Select(x => x.rel).Distinct(StringComparer.Ordinal)) {
+                if (!refCount.TryGetValue(r, out var owners)) refCount[r] = owners = new();
+                owners.Add(t.Name);
+            }
+
+        // 文件夹重名：两个工具叫同一个名字时，后来的加 slug 区分
+        var usedFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var plans = new List<object>();
+        var allTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int moveCount = 0;
+
+        foreach (var t in tools) {
+            var folderName = SanitizeSegment(t.Name);
+            if (!usedFolders.Add(folderName)) {
+                folderName = SanitizeSegment($"{t.Name}-{t.Slug}");
+                usedFolders.Add(folderName);
+            }
+            var folder = string.IsNullOrEmpty(root0) ? folderName : $"{root0}/{folderName}";
+
+            var moves = new List<object>();
+            var skipped = new List<object>();
+            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenRel = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var (rel, role) in ToolRefs(t)) {
+                // 【必须比到 :// 】。只判 "http" 开头的话，名字叫 http-status.html
+                // 的文件会被当成外链默默丢掉——既不搬也不报，人看清单根本发现不了
+                if (IsExternal(rel)) continue;
+                // 同一个文件同时挂在两个字段上是常态：103 个工具里有 22 个的
+                // 在线页面和下载文件【就是同一个 html】。不去重就会给同一个源文件
+                // 排两条搬运指令，apply 那边直接整批拒收。
+                // 按 ToolRefs 的出场顺序取第一个角色（在线 > 下载 > 视频 > 说明附件）。
+                if (!seenRel.Add(rel)) continue;
+                var owners = refCount.TryGetValue(rel, out var o) ? o : new List<string>();
+                if (owners.Distinct().Count() > 1) {
+                    skipped.Add(new { path = rel, reason = $"被 {owners.Distinct().Count()} 个工具共用（{string.Join("、", owners.Distinct().Take(4))}），留在原处" });
+                    continue;
+                }
+                if (!TryResolveUnder(root, rel, out var srcFull) || !System.IO.File.Exists(srcFull)) {
+                    skipped.Add(new { path = rel, reason = "磁盘上找不到这个文件（数据库里的引用已经是坏的）" });
+                    continue;
+                }
+                var curDir = (Path.GetDirectoryName(rel) ?? "").Replace('\\','/');
+                var ext = Path.GetExtension(rel);
+
+                // 【已经在自己文件夹里的，一概不动】。归置要干的事是"把散在外面的收回家"，
+                // 不是"照我的命名规则再改一遍名"。少了这一条，这个操作就不幂等：
+                // 人工特意保留的名字（歌名、APK 的 ABI 号）会在下次点按钮时被悄悄改掉。
+                if (string.Equals(curDir, folder, StringComparison.Ordinal)) continue;
+
+                // 目标文件名：工具本体/下载包用文件夹名（这一步顺手把
+                // BatchPerformanceAnalyzer_20260707023857.html 这种机器码名字改成人看得懂的），
+                // 视频统一叫「讲解」，说明文档里的图片等附属文件保持原名不动
+                // 【只有扩展名长得像扩展名时才敢改名】。"DBMigrate-Pro-v0.2" 这种
+                // 没有扩展名的文件，GetExtension 会把版本号里的 ".2" 当成扩展名，
+                // 改出来就是 "DBMigrate-Pro.2" —— 一个谁也打不开的假后缀。
+                var extOk = Regex.IsMatch(ext, @"^\.[A-Za-z][A-Za-z0-9]{0,7}$");
+                var targetName = !extOk ? Path.GetFileName(rel) : role switch {
+                    "video" => "讲解" + ext,
+                    "online" or "download" => folderName + ext,
+                    _ => Path.GetFileName(rel),
+                };
+                // 同名冲突（比如在线本体和下载包都是 .html 却是两个不同文件）：后来的保留原名
+                if (!usedNames.Add(targetName)) targetName = Path.GetFileName(rel);
+                usedNames.Add(targetName);
+
+                var to = $"{folder}/{targetName}";
+                if (string.Equals(rel, to, StringComparison.Ordinal)) continue;          // 已经就位
+                if (string.Equals(curDir, folder, StringComparison.Ordinal)
+                    && string.Equals(Path.GetFileName(rel), targetName, StringComparison.Ordinal)) continue;
+                if (!allTargets.Add(to)) {
+                    skipped.Add(new { path = rel, reason = $"目标 {to} 与另一条冲突，需人工改名" });
+                    continue;
+                }
+                moves.Add(new { from = rel, to, role });
+                moveCount++;
+            }
+
+            plans.Add(new {
+                toolId = t.Id, name = t.Name, slug = t.Slug,
+                currentFolder = t.Folder, folder,
+                moves, skipped,
+            });
+        }
+
+        return Ok(new {
+            toolCount = tools.Count,
+            moveCount,
+            plans,
+            note = "这是干跑结果，没有动任何文件。人工核对后把 moves/folders 发给 apply 执行。",
+        });
+
+        // 一个工具引用到的文件及其角色
+        static IEnumerable<(string rel, string role)> ToolRefs(Tool t) {
+            foreach (var r in RefsIn(t.OnlineUrl))  yield return (r, "online");
+            if (!string.IsNullOrEmpty(t.DownloadFileName)) {
+                var dl = t.DownloadFileName!.Replace('\\','/').TrimStart('/');
+                if (!IsExternal(dl)) yield return (dl, "download");
+            }
+            foreach (var r in RefsIn(t.VideoUrl))   yield return (r, "video");
+            foreach (var r in RefsIn(t.ReadmeMarkdown)) yield return (r, "readme");
+        }
+    }
+
+    // POST /api/admin/tools/organize/apply —— 照单执行
+    // 【全部校验通过才开始搬】，搬到一半失败就把已搬的原样退回去，不留半拉子状态。
+    // 数据库改写放在文件全部搬完之后：文件没搬成时数据库一个字没动，回退干净。
+    [HttpPost("tools/organize/apply")]
+    public async Task<IActionResult> OrganizeApply([FromBody] OrganizeApplyDto dto) {
+        var root = Path.Combine(env.WebRootPath, "uploads");
+        var moves = dto?.Moves ?? Array.Empty<OrganizeMove>();
+        var folders = dto?.Folders ?? Array.Empty<OrganizeFolder>();
+        if (moves.Length == 0 && folders.Length == 0)
+            return BadRequest(new { message = "清单是空的" });
+
+        // ---- 第一遍：全量校验，一条不合格就整体拒绝 ----
+        var errors = new List<string>();
+        var pairs = new List<(string from, string to, string fromFull, string toFull)>();
+        var seenFrom = new HashSet<string>(StringComparer.Ordinal);
+        var seenTo   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var m in moves) {
+            var from = NormalizeName(m.From ?? "").Replace('\\','/').Trim('/');
+            var to   = NormalizeName(m.To   ?? "").Replace('\\','/').Trim('/');
+            if (from.Length == 0 || to.Length == 0) { errors.Add("from/to 不能为空"); continue; }
+            if (from == to) continue;
+
+            var toSegs = to.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var bad = false;
+            foreach (var s in toSegs)
+                if (ValidateSegment(s, "路径") is string e) { errors.Add($"{to}：{e}"); bad = true; break; }
+            if (bad) continue;
+
+            if (!TryResolveUnder(root, from, out var fromFull) || !System.IO.File.Exists(fromFull)) {
+                errors.Add($"{from}：源文件不存在"); continue;
+            }
+            if (!TryResolveUnder(root, to, out var toFull)) { errors.Add($"{to}：目标越界"); continue; }
+            if (System.IO.File.Exists(toFull) || Directory.Exists(toFull)) { errors.Add($"{to}：目标已存在"); continue; }
+            if (!seenFrom.Add(from)) { errors.Add($"{from}：同一个源文件出现了两次"); continue; }
+            if (!seenTo.Add(to))     { errors.Add($"{to}：两条移动指向同一个目标"); continue; }
+            pairs.Add((from, to, fromFull, toFull));
+        }
+        foreach (var f in folders) {
+            if (NormalizeRelDir(f.Folder, out _) is string e) errors.Add($"工具#{f.ToolId} 的文件夹：{e}");
+            if (!await db.Tools.AnyAsync(t => t.Id == f.ToolId)) errors.Add($"工具#{f.ToolId} 不存在");
+        }
+        if (errors.Count > 0)
+            return BadRequest(new { message = $"清单有 {errors.Count} 处问题，一个都没执行", errors = errors.Take(50) });
+
+        // ---- 第二遍：搬文件。中途失败则原样退回 ----
+        var done = new List<(string from, string to, string fromFull, string toFull)>();
+        try {
+            foreach (var p in pairs) {
+                Directory.CreateDirectory(Path.GetDirectoryName(p.toFull)!);
+                System.IO.File.Move(p.fromFull, p.toFull);
+                done.Add(p);
+            }
+        } catch (Exception ex) {
+            var undoFailed = new List<string>();
+            foreach (var p in Enumerable.Reverse(done)) {
+                try { System.IO.File.Move(p.toFull, p.fromFull); }
+                catch { undoFailed.Add(p.to); }   // 退不回来的必须报出来，不能吞
+            }
+            return StatusCode(500, new {
+                message = $"搬到第 {done.Count + 1} 个时失败：{ex.Message}。数据库未改动。",
+                rolledBack = done.Count - undoFailed.Count,
+                undoFailed,
+            });
+        }
+
+        // ---- 第三遍：改引用 + 记旧路径映射（一次批量，不逐条扫全库）----
+        await RewriteReferencesBatchAsync(pairs.Select(p => (p.from, p.to)));
+
+        // ---- 第四遍：写回每个工具的归置目录 ----
+        foreach (var f in folders) {
+            NormalizeRelDir(f.Folder, out var clean);
+            var tool = await db.Tools.FindAsync(f.ToolId);
+            if (tool != null) { tool.Folder = string.IsNullOrEmpty(clean) ? null : clean; tool.UpdatedAt = DateTime.UtcNow; }
+        }
+        await db.SaveChangesAsync();
+
+        return Ok(new { moved = pairs.Count, folders = folders.Length });
     }
 
     // GET /api/admin/stats —— 后台概览统计数据

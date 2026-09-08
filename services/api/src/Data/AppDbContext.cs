@@ -96,6 +96,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<ListenProgress> ListenProgresses => Set<ListenProgress>();
     public DbSet<ReadProgress> ReadProgresses => Set<ReadProgress>();
 
+    // uploads 文件搬家后的旧路径→新路径映射（站外老链接靠它 301，不断链）
+    public DbSet<UploadRedirect> UploadRedirects => Set<UploadRedirect>();
+
     // ---- 表结构配置 ----
     // 这里配置的内容在 EnsureCreated() 时会自动应用到数据库
     protected override void OnModelCreating(ModelBuilder m) {
@@ -105,6 +108,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         // 唯一索引：每个工具的 slug（URL标识符）不能重复
         m.Entity<Tool>().HasIndex(t => t.Slug).IsUnique();
+
+        // 唯一索引：一个旧路径只能指向一个新路径（同一文件多次搬家时改写既有行，不新增）
+        m.Entity<UploadRedirect>().HasIndex(r => r.OldPath).IsUnique();
 
         // 唯一索引：订单号不能重复
         m.Entity<Order>().HasIndex(o => o.OrderNo).IsUnique();

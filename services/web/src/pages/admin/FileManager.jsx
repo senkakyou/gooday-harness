@@ -11,7 +11,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { listFiles, deleteFile, renameFile, moveFile, createFolder,
-  batchDeleteFiles, deleteFolder, cleanOrphans } from '../../api/admin'
+  batchDeleteFiles, deleteFolder, cleanOrphans, organizePlan, organizeApply } from '../../api/admin'
 import useToastStore from '../../store/toastStore'
 import { confirmDialog } from '../../store/confirmStore'
 
@@ -223,6 +223,36 @@ export default function FileManager() {
     } finally { setBusy(false) }
   }
 
+  // —— 归置工具文件 ——
+  // 先干跑拿清单，把清单摆给人看（前 12 条 + 总数），确认后才照单执行。
+  // 【不做"算完直接搬"】：这是批量、跨全站改引用的操作，看不见清单就按的按钮迟早会误按。
+  const handleOrganize = async () => {
+    setBusy(true)
+    try {
+      const plan = await organizePlan('tools')
+      const moves = plan.plans.flatMap(p => p.moves)
+      const skipped = plan.plans.flatMap(p => p.skipped)
+      if (moves.length === 0) {
+        toast(skipped.length ? `没有需要搬的文件（${skipped.length} 项跳过，见工具详情）` : '所有工具文件都已归置到位')
+        return
+      }
+      const preview = moves.slice(0, 12).map(m => `· ${m.from}\n   → ${m.to}`).join('\n')
+      const more = moves.length > 12 ? `\n…还有 ${moves.length - 12} 个` : ''
+      const skipNote = skipped.length ? `\n\n跳过 ${skipped.length} 项（共用文件/找不到的文件），留在原处。` : ''
+      const ok = await confirmDialog(
+        `将移动 ${moves.length} 个文件到各自的工具文件夹：\n\n${preview}${more}${skipNote}\n\n站内引用会自动同步，旧地址会 301 到新地址。`,
+        { confirmText: `确认归置 ${moves.length} 个` })
+      if (!ok) return
+      const folders = plan.plans.filter(p => p.moves.length > 0)
+        .map(p => ({ toolId: p.toolId, folder: p.folder }))
+      const res = await organizeApply({ moves, folders })
+      toast(`已归置 ${res.moved} 个文件`)
+      load()
+    } catch (e) {
+      toast(e.response?.data?.message || e.message || '归置失败', true)
+    } finally { setBusy(false) }
+  }
+
   // —— 新建文件夹 ——
   const submitNewFolder = async () => {
     const name = newFolderName.trim()
@@ -272,6 +302,10 @@ export default function FileManager() {
               🧹 一键清理空闲 {stats.free}
             </button>
           )}
+          <button className="btn btn-ghost btn-sm" onClick={handleOrganize} disabled={busy || deleting}
+            title="把散落在外的工具文件收进各自的 tools/<工具名>/ 文件夹（先看清单再确认）">
+            📦 归置工具文件
+          </button>
           <button className="btn btn-ghost btn-sm" onClick={() => setNewFolderOpen(true)}>＋ 文件夹</button>
           <button className="btn btn-ghost btn-sm" onClick={load}>↻ 刷新</button>
         </div>

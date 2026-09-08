@@ -31,7 +31,10 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
                 t.Id, t.Name, t.Slug, t.Description, t.Category,
                 t.IconEmoji, t.IsOnline, t.HasDownload,
                 t.DownloadCount, t.ViewCount, t.RequireLogin,
-                t.IsPaid, t.Price, t.CreatedAt
+                t.IsPaid, t.Price, t.CreatedAt,
+                // 视频讲解：列表只要"有没有"和"多长"，URL 到详情再给
+                hasVideo = t.VideoUrl != null && t.VideoUrl != "",
+                t.VideoDuration
             }).ToListAsync());
     }
 
@@ -45,6 +48,20 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
         tool.ViewCount++;  // 每次访问详情页计一次浏览量
         await db.SaveChangesAsync();
         return Ok(tool);
+    }
+
+    // POST /api/tools/:slug/video-play
+    // 视频讲解播放计数 +1。无需登录（讲解本身就是公开的引流内容）。
+    // 前端在真正开始播放时才打这一下，不是打开详情就算——否则数字等于浏览量，白记。
+    [HttpPost("{slug}/video-play")]
+    public async Task<IActionResult> VideoPlay(string slug)
+    {
+        var tool = await db.Tools.FirstOrDefaultAsync(t => t.Slug == slug && t.IsPublished);
+        if (tool == null) return NotFound();
+        if (string.IsNullOrEmpty(tool.VideoUrl)) return BadRequest(new { message = "该工具没有视频讲解" });
+        tool.VideoPlayCount++;
+        await db.SaveChangesAsync();
+        return Ok(new { playCount = tool.VideoPlayCount });
     }
 
     // GET /api/tools/:slug/download
@@ -91,8 +108,15 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
                 });
         }
 
-        // 拼接文件物理路径（wwwroot/uploads/文件名）
-        var fp = Path.Combine(env.WebRootPath, "uploads", tool.DownloadFileName);
+        // 拼接文件物理路径（wwwroot/uploads/<可能带子目录的相对路径>）。
+        // 归置后每个工具的文件都在自己的文件夹里（tools/照片管家Pro/xxx.zip），
+        // 所以这里必须按相对路径解析，并【规范化后确认没跑出 uploads】——
+        // 这个字段虽然只有管理员能写，但一个 ../../ 就能读到数据库文件。
+        var uploadRoot = Path.GetFullPath(Path.Combine(env.WebRootPath, "uploads"));
+        var rel = tool.DownloadFileName.Replace('\\', '/').TrimStart('/');
+        var fp  = Path.GetFullPath(Path.Combine(uploadRoot, rel.Replace('/', Path.DirectorySeparatorChar)));
+        if (!fp.StartsWith(uploadRoot + Path.DirectorySeparatorChar))
+            return BadRequest(new { message = "下载路径非法" });
         if (!System.IO.File.Exists(fp))
             return NotFound(new { message = "文件不存在" });
 
@@ -108,7 +132,7 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
         await db.SaveChangesAsync();
 
         // 根据文件扩展名设置正确的 Content-Type
-        var ct = Path.GetExtension(tool.DownloadFileName).ToLower() switch {
+        var ct = Path.GetExtension(rel).ToLower() switch {
             ".py"   => "text/x-python",
             ".html" => "text/html",
             ".zip"  => "application/zip",
@@ -117,8 +141,10 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
             ".apk"  => "application/vnd.android.package-archive",
             _       => "application/octet-stream"  // 未知类型，触发浏览器下载
         };
-        // PhysicalFile：直接返回磁盘文件，第三个参数是下载时的文件名
-        return PhysicalFile(fp, ct, tool.DownloadFileName);
+        // PhysicalFile：直接返回磁盘文件，第三个参数是下载时的文件名。
+        // 【只能给纯文件名】：带上子目录会生成 filename="tools/x/y.zip" 这种
+        // Content-Disposition，浏览器各自截取，落到用户硬盘上的名字就不可控了。
+        return PhysicalFile(fp, ct, Path.GetFileName(rel));
     }
 
     // GET /api/categories

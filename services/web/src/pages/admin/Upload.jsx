@@ -21,9 +21,11 @@ export default function Upload() {
     setResult('')
     setProgress(0)
     try {
-      // 第二个参数是进度回调，uploadFile 在上传过程中实时调用它
-      const data = await uploadFile(file, p => setProgress(p))
-      setResult(`✅ 上传成功：${data.filename}`)
+      // 第二个参数是目标目录（这里不指定，落 uploads 根），第三个是进度回调
+      const data = await uploadFile(file, null, p => setProgress(p))
+      // 显示的是相对 uploads 的完整路径——工具的下载文件名字段要填的就是它。
+      // （原先取的是 data.filename，后端返回的字段是 fileName，一直显示 undefined）
+      setResult(`✅ 上传成功：${data.path}`)
       toast('上传成功')
     } catch (e) {
       setResult(`❌ ${e.message}`)

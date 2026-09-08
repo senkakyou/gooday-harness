@@ -6,10 +6,13 @@
 import React from 'react'
 
 export default function ToolFormModal({
-  form, setForm, editId, formErr, uploading,
-  onUpload, onSave, onClose,
+  form, setForm, editId, formErr, uploading, uploadPct = 0, defaultFolder = '',
+  onUpload, onVideoUpload, onSave, onClose,
 }) {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  // 视频来源看 URL 形态，不另设开关：http 开头=外链，其余=站内文件。
+  // 后端也是这么判的，两边同一套规则，不会出现"选了外链却填站内路径"的矛盾记录
+  const videoIsLink = /^https?:\/\//i.test(form.videoUrl || '')
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal modal-lg" style={{ maxHeight: '90vh', overflowY: 'auto' }}>
@@ -29,6 +32,27 @@ export default function ToolFormModal({
           <label>说明</label>
           <textarea rows={3} value={form.readmeMarkdown} onChange={e => set('readmeMarkdown', e.target.value)}
             style={{ resize: 'vertical', width: '100%', background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '9px 11px', borderRadius: 4, fontSize: 16, outline: 'none' }} />
+        </div>
+
+        {/* 归置目录：这个工具的文件都往这里放 */}
+        <div className="dfg">
+          <label>文件夹</label>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              style={{ flex: 1 }}
+              value={form.folder}
+              onChange={e => set('folder', e.target.value)}
+              placeholder={defaultFolder || 'tools/工具名（支持中文）'}
+            />
+            {defaultFolder && form.folder !== defaultFolder && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('folder', defaultFolder)}>
+                按工具名
+              </button>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+            留空则上传时按工具名自动生成。文件名不能含 / \ : * ? " &lt; &gt; | # %
+          </div>
         </div>
 
         {/* 在线运行 + 下载配置 */}
@@ -51,17 +75,62 @@ export default function ToolFormModal({
             {/* 只在勾选"支持下载"后才显示文件名+上传按钮 */}
             {form.hasDownload && (
               <div className="dfg">
-                <label>文件名</label>
+                <label>文件路径</label>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <input style={{ flex: 1 }} value={form.downloadFileName} onChange={e => set('downloadFileName', e.target.value)} placeholder="上传后自动填入" />
+                  <input style={{ flex: 1 }} value={form.downloadFileName} onChange={e => set('downloadFileName', e.target.value)} placeholder="上传后自动填入（含文件夹）" />
                   {/* 用 label 包裹隐藏的 file input，点击 label 等同于点击 input */}
-                  <label className="btn btn-ghost btn-sm" style={{ cursor: 'pointer' }}>
+                  <label className="btn btn-ghost btn-sm" style={{ cursor: uploading ? 'default' : 'pointer' }}>
                     {uploading ? '上传中...' : '上传'}
-                    <input type="file" style={{ display: 'none' }} onChange={e => onUpload(e.target.files[0])} />
+                    {/* 选完清空 value：不清的话同一个文件再选一次不触发 onChange，看着像没反应 */}
+                    <input type="file" style={{ display: 'none' }} disabled={uploading}
+                      onChange={e => { onUpload(e.target.files[0]); e.target.value = '' }} />
                   </label>
                 </div>
               </div>
             )}
+          </div>
+        </div>
+
+        {/* 视频讲解：站内上传 或 外链（B站等）。VideoUrl 有值就等于"有讲解"，没有单独的开关 */}
+        <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '0.75rem', marginTop: '0.5rem' }}>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', marginBottom: 8 }}>
+            🎬 视频讲解{form.videoUrl ? (videoIsLink ? '（外链）' : '（站内文件）') : '（未设置）'}
+          </div>
+          <div className="dfg">
+            <label>视频地址</label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input
+                style={{ flex: 1 }}
+                value={form.videoUrl}
+                onChange={e => set('videoUrl', e.target.value)}
+                placeholder="B站链接，或点右侧上传 mp4"
+              />
+              <label className="btn btn-ghost btn-sm" style={{ cursor: uploading ? 'default' : 'pointer', whiteSpace: 'nowrap' }}>
+                {uploading ? (uploadPct ? `${uploadPct}%` : '上传中...') : '上传'}
+                <input type="file" accept="video/mp4,video/webm" style={{ display: 'none' }}
+                  disabled={uploading}
+                  onChange={e => { onVideoUpload?.(e.target.files[0]); e.target.value = '' }} />
+              </label>
+              {form.videoUrl && (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { set('videoUrl', ''); set('videoDuration', '') }}>
+                  清除
+                </button>
+              )}
+            </div>
+          </div>
+          {/* 上传大文件时给条进度，否则用户不知道是在传还是卡死了 */}
+          {uploading && uploadPct > 0 && (
+            <div style={{ height: 4, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden', margin: '2px 0 8px' }}>
+              <div style={{ width: `${uploadPct}%`, height: '100%', background: 'var(--accent)' }} />
+            </div>
+          )}
+          <div className="dfg">
+            <label>时长（秒）</label>
+            <input type="number" min="0" value={form.videoDuration}
+              onChange={e => set('videoDuration', e.target.value)} placeholder="选填，卡片上显示 8:32" />
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+            上传只收 mp4 / webm，单个最大 500MB。讲解一律公开，不跟"需要登录/收费"挂钩。
           </div>
         </div>
 

@@ -7,7 +7,7 @@
 // =====================================================
 
 import React, { useEffect, useRef, useState } from 'react'
-import { listAdminTools, createTool, updateTool, deleteTool, uploadFile } from '../../api/admin'
+import { listAdminTools, createTool, updateTool, deleteTool, uploadFile, uploadToolVideo } from '../../api/admin'
 import useToastStore from '../../store/toastStore'
 import { confirmDialog } from '../../store/confirmStore'
 import ToolFormModal from './ToolFormModal'
@@ -17,7 +17,13 @@ const EMPTY_FORM = {
   name: '', slug: '', category: '', iconEmoji: '🔧', description: '', readmeMarkdown: '',
   isOnline: false, onlineUrl: '', hasDownload: false, downloadFileName: '',
   isPublished: true, requireLogin: true, isPaid: false, price: '',
+  videoUrl: '', videoDuration: '', folder: '',
 }
+
+// 工具名 → 默认文件夹名（uploads/tools/<工具名>）。
+// 只削掉文件系统和 URL 会咬人的字符，中文原样保留——文件夹名就该是人看得懂的。
+const folderFromName = (name) =>
+  'tools/' + (name || '').trim().replace(/[/\\:*?"<>|#%]/g, '_').replace(/^\.+|\.+$/g, '').slice(0, 60).trim()
 
 // 工具记录 → 接口请求体（复制/上下架时复用，字段与 createTool 对齐）
 const toBody = (t) => ({
@@ -27,6 +33,8 @@ const toBody = (t) => ({
   hasDownload: t.hasDownload, downloadFileName: t.downloadFileName || null,
   isPublished: t.isPublished, requireLogin: t.requireLogin,
   isPaid: t.isPaid || false, price: parseFloat(t.price) || 0,
+  videoUrl: t.videoUrl || null, videoDuration: parseInt(t.videoDuration, 10) || 0,
+  folder: t.folder || null,
 })
 
 // 工具状态 → 彩色胶囊（基于真实字段，无新增字段）
@@ -45,6 +53,7 @@ export default function Tools() {
   const [editId, setEditId] = useState(null)    // 正在编辑的工具 id（null=新增）
   const [formErr, setFormErr] = useState('')    // 表单错误信息
   const [uploading, setUploading] = useState(false)  // 文件上传中状态
+  const [uploadPct, setUploadPct] = useState(0)      // 视频上传进度（大文件必须有进度，否则用户以为卡死）
   const [menuId, setMenuId] = useState(null)    // 当前展开 kebab 菜单的工具 id
   const [q, setQ] = useState('')                // 搜索关键词
   const [cat, setCat] = useState('')            // 分类筛选（''=全部）
@@ -88,6 +97,8 @@ export default function Tools() {
       hasDownload: t.hasDownload, downloadFileName: t.downloadFileName || '',
       isPublished: t.isPublished, requireLogin: t.requireLogin,
       isPaid: t.isPaid || false, price: t.price || '',
+      videoUrl: t.videoUrl || '', videoDuration: t.videoDuration || '',
+      folder: t.folder || '',
     })
     setEditId(t.id); setFormErr(''); setModal(true)
   }
@@ -102,6 +113,10 @@ export default function Tools() {
       hasDownload: t.hasDownload, downloadFileName: t.downloadFileName || '',
       isPublished: false, requireLogin: t.requireLogin,
       isPaid: t.isPaid || false, price: t.price || '',
+      // 副本共用原工具的文件（在线地址/下载包/讲解都指向同一批文件），
+      // 但【文件夹留空】——两个工具指同一个文件夹，以后往里传东西就分不清是谁的了
+      videoUrl: t.videoUrl || '', videoDuration: t.videoDuration || '',
+      folder: '',
     })
     setEditId(null); setFormErr(''); setModal(true)
   }
@@ -124,6 +139,9 @@ export default function Tools() {
       downloadFileName: form.downloadFileName || null,
       readmeMarkdown: form.readmeMarkdown || null,
       price: parseFloat(form.price) || 0,
+      videoUrl: form.videoUrl || null,
+      videoDuration: parseInt(form.videoDuration, 10) || 0,
+      folder: form.folder || null,
     }
     try {
       if (editId) await updateTool(editId, body)
@@ -140,16 +158,37 @@ export default function Tools() {
     catch (e) { toast(e.message, true) }
   }
 
-  // 在编辑弹窗内上传工具文件，上传完后自动填入文件名字段
+  // 上传目标目录：表单填了就用表单的，没填就按工具名现算一个（tools/<工具名>）。
+  // 没有工具名时返回空串 → 落 uploads 根，跟改造前一样，不至于卡住上传。
+  const uploadDir = () => (form.folder || (form.name ? folderFromName(form.name) : ''))
+
+  // 在编辑弹窗内上传工具文件，上传完后自动填入路径字段
   const handleUpload = async (file) => {
     if (!file) return
     setUploading(true)
     try {
-      const data = await uploadFile(file)
-      set('downloadFileName', data.fileName)
+      const dir = uploadDir()
+      const data = await uploadFile(file, dir)
+      // 存的是相对 uploads 的完整路径（tools/照片管家Pro/xxx.zip），不是纯文件名
+      set('downloadFileName', data.path)
+      if (dir && !form.folder) set('folder', dir)   // 顺手把文件夹字段坐实
       toast('上传成功')
     } catch (e) { toast(e.message, true) }
     finally { setUploading(false) }
+  }
+
+  // 上传视频讲解（走 500M 的专用端点），完成后填入 videoUrl
+  const handleVideoUpload = async (file) => {
+    if (!file) return
+    setUploading(true)
+    try {
+      const dir = uploadDir()
+      const data = await uploadToolVideo(file, dir, p => setUploadPct(p))
+      set('videoUrl', data.url)
+      if (dir && !form.folder) set('folder', dir)
+      toast('视频上传成功')
+    } catch (e) { toast(e.message, true) }
+    finally { setUploading(false); setUploadPct(0) }
   }
 
   // 从工具列表计算统计数字（无需额外接口）
@@ -250,8 +289,10 @@ export default function Tools() {
       {modal && (
         <ToolFormModal
           form={form} setForm={setForm} editId={editId}
-          formErr={formErr} uploading={uploading}
-          onUpload={handleUpload} onSave={handleSave} onClose={() => setModal(false)}
+          formErr={formErr} uploading={uploading} uploadPct={uploadPct}
+          defaultFolder={form.name ? folderFromName(form.name) : ''}
+          onUpload={handleUpload} onVideoUpload={handleVideoUpload}
+          onSave={handleSave} onClose={() => setModal(false)}
         />
       )}
     </>

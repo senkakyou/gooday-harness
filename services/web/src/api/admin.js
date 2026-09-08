@@ -38,16 +38,39 @@ export const listUsers = () =>
 export const toggleUser = (id) =>
   client.put(`/admin/users/${id}/toggle`).then(r => r.data)
 
-// 文件上传：POST /api/admin/upload（multipart/form-data 格式）
+// 文件上传：POST /api/admin/upload?dir=tools/照片管家Pro（multipart/form-data 格式）
+// dir 省略则落在 uploads 根目录（老行为）。返回 { fileName, path, url, size }，
+// 【要存进工具字段的是 path】——文件在子目录里时只存 fileName 就找不到了。
 // onProgress 是回调函数，上传过程中实时更新进度（0-100）
-export const uploadFile = (file, onProgress) => {
+export const uploadFile = (file, dir, onProgress) => {
   const fd = new FormData()   // FormData 是浏览器原生对象，专门用于文件上传
   fd.append('file', file)
   return client.post('/admin/upload', fd, {
+    params: dir ? { dir } : {},
     // e.loaded 是已上传字节数，e.total 是总字节数，算出百分比
     onUploadProgress: e => onProgress && onProgress(Math.round((e.loaded * 100) / e.total)),
   }).then(r => r.data)
 }
+
+// 视频讲解上传：POST /api/admin/tools/video-upload?dir=...
+// 单独一个端点是因为体积上限是 500M（普通上传 100M），nginx 侧也只对这个路径放宽
+export const uploadToolVideo = (file, dir, onProgress) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  return client.post('/admin/tools/video-upload', fd, {
+    params: dir ? { dir } : {},
+    timeout: 0,   // 500MB 慢速上行可能要很久，别让默认超时把上到一半的传输掐了
+    onUploadProgress: e => onProgress && onProgress(Math.round((e.loaded * 100) / e.total)),
+  }).then(r => r.data)
+}
+
+// 归置干跑：GET /api/admin/tools/organize/plan —— 只算方案，不动任何文件
+export const organizePlan = (prefix = 'tools') =>
+  client.get('/admin/tools/organize/plan', { params: { prefix } }).then(r => r.data)
+
+// 归置执行：POST /api/admin/tools/organize/apply —— 照单执行 { moves, folders }
+export const organizeApply = (payload) =>
+  client.post('/admin/tools/organize/apply', payload, { timeout: 0 }).then(r => r.data)
 
 // 文件管理：GET /api/admin/files —— 返回 { files: [...], dirs: [...] }
 export const listFiles = () => client.get('/admin/files').then(r => r.data)

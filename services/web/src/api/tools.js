@@ -13,6 +13,11 @@ export const listTools = (category) =>
 export const getTool = (slug) =>
   client.get(`/tools/${slug}`).then(r => r.data)
 
+// 视频讲解播放计数 +1：POST /api/tools/:slug/video-play
+// 真开始播时才打这一下（不是打开详情就打），失败也不打扰用户——统计数字不值得弹错误
+export const reportVideoPlay = (slug) =>
+  client.post(`/tools/${slug}/video-play`).then(r => r.data).catch(() => null)
+
 // 获取所有分类：GET /api/categories
 export const getCategories = () =>
   client.get('/categories').then(r => r.data)

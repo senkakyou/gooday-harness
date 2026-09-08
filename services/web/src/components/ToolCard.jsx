@@ -20,6 +20,13 @@ const CAT_COLORS = {
   '游戏':   { bg:'rgba(255,71,87,0.1)',   color:'var(--danger)',  border:'rgba(255,71,87,0.3)'   },
 }
 
+// 秒 → 8:32。视频时长没填（0）时不显示，标签就只写"讲解"
+const fmtDur = (s) => {
+  const n = parseInt(s, 10) || 0
+  if (n <= 0) return ''
+  return ` ${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`
+}
+
 export default function ToolCard({ tool, onClick, favorited = false, onToggleFavorite, highlighted = false }) {
   const cat = CAT_COLORS[tool.category] || CAT_COLORS['工具']
 
@@ -72,13 +79,23 @@ export default function ToolCard({ tool, onClick, favorited = false, onToggleFav
           marginBottom:8,
         }}>{tool.description}</div>
         {/* Buttons + stats (same row) */}
-        <div style={{ display:'flex', alignItems:'center', gap:'0.35rem', flexWrap:'nowrap' }}>
+        {/* 三个标签（在线使用 / 视频讲解 / 下载）＋右侧统计。
+            【必须 wrap】：原来是 nowrap，两个标签时刚好占满，加上讲解这第三个
+            在 375px 宽的手机上会把统计数字挤出卡片。宁可换行也不能溢出。 */}
+        <div style={{ display:'flex', alignItems:'center', gap:'0.35rem', flexWrap:'wrap', rowGap:6 }}>
           {tool.isOnline && (
             <span style={{
               fontSize:11, padding:'3px 10px', borderRadius:999, flexShrink:0,
               background:'rgba(16,185,129,0.1)', color:'var(--green)',
               border:'1px solid rgba(16,185,129,0.3)', fontFamily:'var(--mono)',
             }}>在线使用</span>
+          )}
+          {tool.hasVideo && (
+            <span style={{
+              fontSize:11, padding:'3px 10px', borderRadius:999, flexShrink:0,
+              background:'rgba(244,114,182,0.1)', color:'#f472b6',
+              border:'1px solid rgba(244,114,182,0.3)', fontFamily:'var(--mono)',
+            }}>🎬 讲解{fmtDur(tool.videoDuration)}</span>
           )}
           {tool.hasDownload && (
             <span style={{
