@@ -20,10 +20,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from math_pool import POOL, DONE
 
+# 【G01 五类分离：状态和日志都在仓库外】。
+# 这里原来是连着两行赋值：先写对了 state 目录，下一行又被
+#     SPEC_DIR = os.path.join(HERE, "data", "math-specs")
+# 覆盖回仓库里 —— 正确的那行成了死代码，spec 一直写进版本库目录。
+# 同样 LOG 也写在仓库里。两者都被 .gitignore 挡着没进 git，
+# 于是 **G01 完全看不见**（它只查已跟踪文件），而 G01 的原话是
+# 「状态和产物【不得出现在仓库内】」，不是「不进 git 就行」。
+# 2026-09-08 我自己跑一集测试，产物落进仓库、还被我一并提交了，才撞出来。
 SPEC_DIR = "/var/lib/gooday-harness/state/math-episodes/specs"
-SPEC_DIR = os.path.join(HERE, "data", "math-specs")
 UP = "/srv/gooday-harness/media/uploads"
-LOG = os.path.join(HERE, "math-next.log")
+LOG = "/var/log/gooday-harness/math-episodes-detail.log"
 CLAUDE_TIMEOUT = 420
 
 KINDS = {"statement", "compare", "build", "formula", "mythbust", "life", "quiz"}

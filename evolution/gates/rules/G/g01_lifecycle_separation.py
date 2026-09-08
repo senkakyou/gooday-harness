@@ -61,3 +61,36 @@ def check(ctx):
         if ctx.exists(d):
             yield ("ERROR", f"仓库内出现 {d}/ 目录",
                    "状态/日志/产物/备份一律在仓库外，见 policies G01 的位置表")
+
+    # ── 工作区扫描：.gitignore 挡住的产物，本条一样要抓 ──────────────────
+    #
+    # 【只查已跟踪文件是不够的】。本规则的原话是「状态和产物**不得出现在仓库内**」，
+    # 不是「不进 git 就行」。而 .gitignore 里恰好挡着 *.log / *.mp3 / *.db ——
+    # 于是产线把日志和 spec 写进仓库目录时，G01 一个字都不说。
+    #
+    # 2026-09-08 真撞到：math-episodes 的 SPEC_DIR 连着赋值两次，
+    # 第一行写对了 state 目录、第二行又覆盖回 `HERE/data/math-specs`，
+    # 正确的那行成了死代码。加上 `LOG = HERE/math-next.log`，
+    # 跑一集就往版本库目录里落一份 spec 和一份日志 —— **全程零告警**，
+    # 直到我手滑把那个 spec 一起提交了才暴露。
+    #
+    # 「东西存在但检查器看不见」正是本项目要消灭的形状，G01 自己更不能犯。
+    import os
+    tracked_set = set(tracked)
+    for dirpath, dirnames, filenames in os.walk(ctx.path(".")):
+        dirnames[:] = [d for d in dirnames
+                       if d not in (".git", "node_modules", "__pycache__",
+                                    "obj", "bin", "dist", "build", ".venv")]
+        for fn in filenames:
+            rel = os.path.relpath(os.path.join(dirpath, fn), ctx.path("."))
+            if rel in tracked_set:
+                continue                      # 已跟踪的上面那轮查过了
+            if any(rel.startswith(a) for a in ALLOW):
+                continue
+            for kind, pat, target in MISPLACED:
+                if pat.search(rel):
+                    yield ("ERROR",
+                           f"{kind}出现在仓库目录内（未跟踪，被 .gitignore 挡着）：{rel}",
+                           f"移到 {target}。**「没进 git」不等于「不在仓库里」**——"
+                           "产线把它写在这儿，说明路径配错了，改代码里的路径")
+                    break
