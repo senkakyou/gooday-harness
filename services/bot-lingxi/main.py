@@ -41,8 +41,17 @@ class LingxiBot(Bot):
     """带工具权限的 bot：调模型时要把 allowedTools 传下去。"""
 
     def _model_args(self):
+        args = []
         tools = self.cfg.get("allowed_tools", [])
-        return ["--allowedTools", ",".join(tools)] if tools else []
+        if tools:
+            args += ["--allowedTools", ",".join(tools)]
+        # 额外可访问目录。默认只有服务的工作目录（仓库根），
+        # 而有些任务的对象天然在仓库外（演练副本、日志目录）。
+        # **写在 config 里而不是硬编码**：谁能碰哪些目录要看得见、可审计，
+        # 加一个目录是改配置，不是改代码。
+        for d in self.cfg.get("extra_dirs", []):
+            args += ["--add-dir", d]
+        return args
 
 
 def coo_context(cfg):

@@ -69,3 +69,4 @@ workflows/*/config.json
 services/api/src/wwwroot/uploads/
 services/api/src/wwwroot/chat-media/
 services/api/src/wwwroot/avatars/
+.blind-*

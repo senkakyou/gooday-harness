@@ -27,5 +27,9 @@
   "username": "灵犀",
   "role": "admin",
   "_username": "签 JWT 用。必须与库里 Users.Username 一致。",
-  "_mode": ""
+  "_mode": "",
+  "extra_dirs": [
+    "/tmp/blind-a1"
+  ],
+  "_extra_dirs": "额外可访问目录（--add-dir）。默认只有服务工作目录。加目录是改配置不是改代码，谁能碰哪儿看得见、可审计。"
 }
