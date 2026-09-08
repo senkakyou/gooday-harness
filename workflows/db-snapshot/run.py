@@ -31,7 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(REPO, "packages", "trace"))
 
-from trace import Task                                    # noqa: E402
+from trace import Task, redact                            # noqa: E402
 
 CONFIG = os.path.join(HERE, "config.json")
 BACKUP_ROOT = "/srv/gooday-harness/backups"
@@ -47,7 +47,8 @@ def _hot_backup(db, dest_tmp):
     r = subprocess.run(["sqlite3", db, f".backup '{dest_tmp}'"],
                        capture_output=True, text=True, timeout=600)
     if r.returncode != 0:
-        return False, (r.stderr or "sqlite3 .backup 失败").strip()
+        # 脱敏：这条错误信息会被写进 event（证据链落盘，权限比库松）
+        return False, redact((r.stderr or "sqlite3 .backup 失败").strip())
     if not os.path.exists(dest_tmp) or os.path.getsize(dest_tmp) == 0:
         return False, "备份文件不存在或为 0 字节"
     return True, ""

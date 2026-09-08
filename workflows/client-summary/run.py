@@ -11,6 +11,10 @@ import json, os, subprocess, sqlite3, time, hmac, hashlib, base64
 import urllib.request, ssl, sys
 from datetime import datetime, timezone, timedelta
 
+# 打子进程输出前必须脱敏（AGENTS.md 三条不可协商第一条）
+sys.path.insert(0, "/opt/gooday-harness/packages/trace")
+from trace import redact                                  # noqa: E402
+
 DB_PATH  = "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db"
 API_BASE = "https://localhost"
 LINGXI_ID   = 20
@@ -101,7 +105,9 @@ def call_claude(prompt):
         capture_output=True, text=True, timeout=120
     )
     if result.returncode != 0:
-        raise RuntimeError(f"claude CLI 报错: {result.stderr[:200]}")
+        # 脱敏后再打：claude 的认证类报错里常带 token 前缀 / Authorization 回显，
+        # 而这条异常会落进 cron 日志（AGENTS.md 不可协商第一条）。
+        raise RuntimeError(f"claude CLI 报错: {redact(result.stderr)}")
     return result.stdout.strip()
 
 

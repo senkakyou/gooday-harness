@@ -20,6 +20,11 @@ import os
 sys.path.insert(0, "/opt/gooday-harness/packages/botkit")
 from outbound import MAX_CONTENT, ulen, split     # noqa: E402
 
+# 打子进程输出【必须先脱敏】：认证失败的报错里常带 token 前缀与 Authorization 回显，
+# 而日志权限通常比数据库松。见 AGENTS.md 三条不可协商第一条。
+sys.path.insert(0, "/opt/gooday-harness/packages/trace")
+from trace import redact                          # noqa: E402
+
 
 def insert_pm(cur, sender_id, sender_name, receiver_id, receiver_name, content, ts):
     """写一条私信；超长按服务端上限分段写成多条。
@@ -132,12 +137,12 @@ def call_claude_for_reply(req):
         if result.returncode != 0:
             raise RuntimeError(
                 f"claude 退出码 {result.returncode}；"
-                f"stderr={result.stderr.strip()[:200] or '(空)'}；"
-                f"stdout={result.stdout.strip()[:200] or '(空)'}")
+                f"stderr={redact(result.stderr.strip()) or '(空)'}；"
+                f"stdout={redact(result.stdout.strip()) or '(空)'}")
         if not text.strip():
             raise RuntimeError(
                 f"claude rc=0 但没解析出任何 assistant 文本 —— "
-                f"可能是输出格式变了。stdout 首 200 字={result.stdout.strip()[:200]!r}")
+                f"可能是输出格式变了。stdout 首 200 字={redact(result.stdout.strip())!r}")
 
         # 【不截断，分段】。这里原来写的是 `reply[:990]` 悄悄切掉，
         # 我第一次改时只把 990 换成 MAX_CONTENT 并加了一句提示，理由写的是

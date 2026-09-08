@@ -2,7 +2,13 @@
 # -*- coding: utf-8 -*-
 """定期把新产出的成语集打包成"喜马手动上传清单"推到灵犀聊天(大海)。
 只推 上次之后 的新集(进度 ~/.chengyu_pushed)，没有新集就静默退出。"""
-import os,time,subprocess
+import os,sys,time,subprocess
+
+# 【导入必须在 db() 之前】：db() 在下面十来行就被调用了。
+# 第一版我把这行放在文件底部的分段那段里 —— ast.parse 过、真跑 NameError。
+# 「静态检查全绿 ≠ 系统能跑」（AGENTS.md 三条不可协商第三条）。
+sys.path.insert(0,"/opt/gooday-harness/packages/trace")
+from trace import redact          # 打子进程 stderr 前先脱敏
 DB="/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db"
 BOOK=13; BASE="https://gooday.ltd"; PUSHED=os.path.expanduser("~/.chengyu_pushed")
 def db(sql):
@@ -18,7 +24,7 @@ def db(sql):
     r = subprocess.run(["sudo","-n","/usr/bin/sqlite3","-separator","\x1f",DB,sql],
                        capture_output=True, text=True)
     if r.returncode != 0:
-        raise RuntimeError(f"sqlite3 退出码 {r.returncode}：{r.stderr.strip()[:200]}")
+        raise RuntimeError(f"sqlite3 退出码 {r.returncode}：{redact(r.stderr.strip())}")
     return r.stdout
 last=int(open(PUSHED).read().strip()) if os.path.exists(PUSHED) else 8
 rows=[r for r in db(f"SELECT OrderNo,Title,MediaUrl FROM AudiobookChapters WHERE AudiobookId={BOOK} AND OrderNo>{last} ORDER BY OrderNo;").strip().split("\n") if r]

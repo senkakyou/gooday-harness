@@ -70,6 +70,12 @@ def check(ctx):
     by_name = defaultdict(list)
     for f in tracked:
         base = os.path.basename(f)
+        # 退役归档会把执行入口改名加 `.txt`（让发现机制扫不到，见
+        # examples/retired-*/README.md）。剥掉这个后缀再判——
+        # `run.py.txt` 和 `run.py` 是同一个结构位置，豁免理由完全相同。
+        # 不剥的话，每退役第二条产线就凭空多两条 WARN，而它们不是副本。
+        if base.endswith(".txt"):
+            base = base[:-4]
         # 模板化的文件名本来就该重复，是结构的一部分，不算副本
         if base in ("README.md", "__init__.py", ".gitkeep", "AGENTS.md", "_template.md",
                     "unit.service", "schedule.cron", "main.py", "run.py",

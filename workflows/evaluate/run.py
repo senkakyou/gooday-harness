@@ -19,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(REPO, "packages", "trace"))
 
-from trace import Task                                    # noqa: E402
+from trace import Task, redact                            # noqa: E402
 
 EVALUATORS = os.path.join(REPO, "evolution", "evaluators")
 
@@ -45,8 +45,10 @@ def main():
                                    capture_output=True, text=True, timeout=300)
                 out = (r.stdout or "").strip()
                 # 退出码非 0 = 判了 warn/fail，不是"跑失败"——两者要分清
+                # 评价器的输出整段进 event（会落盘）——先脱敏。
+                # 评价器自己可能打了它读到的配置/凭据片段，这里是最后一道。
                 task.event(f"evaluated:{name}", "P2" if r.returncode else "P3",
-                           {"exit": r.returncode, "output": out[-800:]})
+                           {"exit": r.returncode, "output": redact(out[-800:], 800)})
                 ran.append(name)
                 print(out or f"[evaluate] {name} 无输出")
             except Exception as e:

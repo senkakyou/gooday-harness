@@ -40,6 +40,7 @@ Decision 由人写进 docs/decisions/。
 """
 import json
 import os
+import re
 import shutil
 import socket
 import sys
@@ -83,6 +84,39 @@ def _share(path):
         os.chown(path, st.st_uid, st.st_gid)
     except OSError:
         pass                          # 改不动不该让写事件本身失败
+
+
+# ── 日志脱敏 ────────────────────────────────────────────────────────────
+#
+# AGENTS.md 的三条不可协商第一条：**凭据、密钥、token 任何理由都不输出**
+# 到屏幕、日志、外部。而排障时最想打的恰恰是子进程的 stderr/stdout ——
+# 认证失败的报错里常带 token 前缀、Authorization 头回显、密钥上下文。
+#
+# 2026-09-08 灵犀第七轮指出：那一轮我为了「让真因进日志」新加了三处
+# 打印原始 stderr/stdout 的代码 —— **修一个静默失败，造出一个凭据外泄面**。
+# 日志的权限通常比数据库松，还可能被收集外传。
+#
+# 所以放在这里（trace 是全仓最底层的零依赖库）：**要打子进程输出，先过这个函数。**
+_SECRET_PAT = re.compile(
+    r"\b(?:sk-[A-Za-z0-9_\-]{8,}"          # OpenAI/Anthropic 风格
+    r"|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]*\.?[A-Za-z0-9_\-]*"  # JWT
+    r"|gh[pousr]_[A-Za-z0-9]{16,}"          # GitHub token
+    r")\b"
+    # 键名后跟值的形态。引号要允许出现在【键名之后】和【值之前】——
+    # 第一版没允许，于是 {"JWT_SECRET":"hunter2"} 这种 JSON 形态整个漏掉，
+    # 而它恰恰是 compose / .NET 配置报错里最常见的样子（自测时才发现）。
+    r"|(?i:(?:bearer|authorization|token|secret|password|api[-_]?key)"
+    r"[\"\']?\s*[:=]\s*[\"\']?)[^\s\"\',}]+")
+
+
+def redact(text, limit=200):
+    """把可能是凭据的片段替换掉，再截断。**打子进程输出前必须过一遍。**
+
+    宁可多替换一点：漏打一段报错只是排障慢一点，漏出一个 token 是事故。
+    """
+    if not text:
+        return ""
+    return _SECRET_PAT.sub("<已脱敏>", str(text))[:limit]
 
 
 def _now():

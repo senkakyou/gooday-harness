@@ -18,7 +18,9 @@ import json, os, re, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, "/opt/gooday-harness/packages/trace")
 from math_pool import POOL, DONE
+from trace import redact          # 打子进程输出前先脱敏（AGENTS.md 不可协商第一条）
 
 # 【G01 五类分离：状态和日志都在仓库外】。
 # 这里原来是连着两行赋值：先写对了 state 目录，下一行又被
@@ -139,7 +141,7 @@ def gen_episode(topic):
         # 20 集全失败，日志里每条都是 `rc=1 err=` —— 真因一个字都没有，
         # 因为 claude CLI 的错误常打在 stdout 上。
         # 「有日志但看不出真因」和没日志一样，事后无法复盘。
-        err = p.stderr.strip()[:200] or f"(stderr 空) stdout={out[:200]!r}"
+        err = redact(p.stderr.strip()) or f"(stderr 空) stdout={redact(out)!r}"
         log(f"  ! {topic['id']} Claude rc={p.returncode} err={err}")
         return None
 
@@ -274,7 +276,7 @@ def build_and_publish(topic, script, scenes, do_render, do_publish):
         if l.strip():
             log("    " + l.strip())
     if r.returncode != 0:
-        log(f"  ! {ep} 出片失败 rc={r.returncode} {r.stderr.strip()[:150]}")
+        log(f"  ! {ep} 出片失败 rc={r.returncode} {redact(r.stderr.strip(), 150)}")
     return ok
 
 
