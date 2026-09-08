@@ -110,7 +110,7 @@ echo "────────────────────────�
 echo "完成：$ok 项正常，$warn 项需要看一眼"
 echo
 echo "接下来观察 24 小时，重点看这几条第一次触发："
-echo "  02:00 client-summary / math-episodes   02:30 cert-renew"
+echo "  02:00 client-summary                    02:30 cert-renew"
 echo "  08:05 invest-warmup（工作日）          09:00 daily-report"
 echo "  日志都在 /var/log/gooday-harness/"
 echo
