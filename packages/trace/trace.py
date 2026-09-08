@@ -121,8 +121,23 @@ class Task:
             # 事件量大，按天追加 JSONL；单条 JSON 一行，坏一行不影响其余
             os.makedirs(EVENT_DIR, exist_ok=True)
             day = rec["at"][:10]
-            with open(os.path.join(EVENT_DIR, f"{day}.jsonl"), "a", encoding="utf-8") as f:
+            path = os.path.join(EVENT_DIR, f"{day}.jsonl")
+            # 【当天第一个写的人决定这个文件的权限，而写它的身份不止一个】。
+            #
+            # 2026-09-08 实测：root cron 在 00:38 先建了当天文件（0644），
+            # 于是 agent 侧的工作流一整天都 PermissionError ——
+            # **每天 0 点复发一次**，而且是那种「系统看起来一切正常」的形态。
+            # （这次是 trace 自己响亮降级 + 门禁 G07 抓到的，不是人发现的。）
+            #
+            # 所以新建时就放开同组写；root 与 agent 都在能写这个目录的位置上。
+            new = not os.path.exists(path)
+            with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            if new:
+                try:
+                    os.chmod(path, 0o664)
+                except OSError:
+                    pass          # 改不动权限不该让写事件本身失败
         except Exception as e:
             _degrade("Event", e)
         return rec

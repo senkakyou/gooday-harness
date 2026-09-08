@@ -27,6 +27,18 @@ OVERDUE_HOURS = 2      # 正常使用下每次调用都会把 expiresAt 续到�
 
 
 def run(cfg):
+    # 事件文件写不动 = 证据链当天整条丢失，而系统看起来一切正常
+    w = _events_writable()
+    if w is False:
+        import time as _t
+        f = _t.strftime("%Y-%m-%d") + ".jsonl"
+        yield {"level": "P0", "what": f"当天事件文件 {f} 当前身份写不动",
+               "why": "当天第一个写的人决定文件权限，而 root cron 与 agent cron 都在写。"
+                      "写不动 = 这一整天的证据链丢失，**而系统看起来一切正常**",
+               "fix": "sudo chmod 664 <事件文件>；根治已在 packages/trace 里"
+                      "（新建时即放开同组写），但已存在的旧文件要手工改一次",
+               "action": None}
+
     for c in cfg.get("credentials", []):
         who, path = c["who"], c["path"]
         required = c.get("required", False)
@@ -79,3 +91,20 @@ def run(cfg):
                           f"说明很久没有一次成功调用了",
                    "fix": f"以 {who} 身份重新登录，再重启相关服务",
                    "action": None}
+
+
+def _events_writable():
+    """当天事件文件当前身份写不写得动。
+
+    2026-09-08 实测：当天第一个写的人决定文件权限，而写它的身份不止一个
+    （root cron 与 agent cron 都在写）。root 先建就是 0644，
+    agent 侧一整天全部 PermissionError —— **每天 0 点复发一次**。
+    trace 会响亮降级（标记文件 + stderr），但没有任何东西在主动查它。
+    """
+    import time as _t
+    d = os.path.join(os.environ.get("GOODAY_HARNESS_STATE",
+                                    "/var/lib/gooday-harness"), "events")
+    f = os.path.join(d, _t.strftime("%Y-%m-%d") + ".jsonl")
+    if not os.path.exists(f):
+        return None                       # 今天还没人写过，无从判断
+    return os.access(f, os.W_OK)

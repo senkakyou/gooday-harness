@@ -23,8 +23,10 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(REPO, "packages", "trace"))
+sys.path.insert(0, os.path.join(REPO, "packages", "finding"))
 
 from trace import Task                                    # noqa: E402
+import finding as fnd                                     # noqa: E402
 
 STATE = os.environ.get("GOODAY_HARNESS_STATE", "/var/lib/gooday-harness")
 CHECKS_DIR = os.path.join(HERE, "checks")
@@ -69,6 +71,14 @@ def main():
 
     with Task("patrol", subject=cfg.get("mode", "shadow"), actor="patrol") as task:
         findings, failed_checks = [], []
+        # 处置规则表外置在 ops/dispositions.json：由发现方自己打标，
+        # 等于把「什么该人管」的判断权交给发现方，标错了就静默漏掉。
+        disp_rules, disp_default, disp_err = fnd.load_table()
+        unknown_kinds = set()
+        agg = fnd.Aggregator("patrol",
+                             window_min=cfg.get("finding_window_min", 60))
+        if disp_err:
+            task.event("disposition_table_unreadable", "P1", {"error": disp_err})
 
         for name, mod in load_checks():
             if isinstance(mod, Exception):
@@ -80,8 +90,22 @@ def main():
                 for f in (mod.run(cfg) or []):
                     f["check"] = name
                     findings.append(f)
-                    task.event(f"finding:{name}", f.get("level", "P3"),
-                               {k: f.get(k) for k in ("what", "why", "fix")})
+
+                    kind = f"finding:{name}"
+                    disp, known = fnd.classify(kind, disp_rules, disp_default)
+                    f["_disposition"] = disp
+                    if not known:
+                        unknown_kinds.add(kind)
+
+                    # 【同指纹在窗口内合并】。实测：334 条 finding 只有 60 个
+                    # 不同指纹，重复最多的一条出现 87 次（同一个 P0 每 5 分钟
+                    # 报一次直到修掉）。不聚合的话 events/ 自己会变成噪音源，
+                    # patrol 反而更瞎（灵犀 2026-09-08）。
+                    fresh, n = agg.see(f)
+                    if fresh:
+                        task.event(kind, f.get("level", "P3"),
+                                   dict({k: f.get(k) for k in ("what", "why", "fix")},
+                                        disposition=disp))
             except Exception as e:
                 # 一项挂掉不能让整轮停摆，但【必须留痕】——
                 # 悄悄少跑一项，等于那块永远不会被巡检到
@@ -150,6 +174,11 @@ def main():
 
         acted = []
         for f in findings:
+            # 【退避只管 auto 类】。notify-only 的发现不进退避账本、
+            # 不触发自动处置 —— 退避看的不是「事件在不在流里」，
+            # 是「这条标没标可自动处置」。混的是存储，不是处置策略。
+            if f.get("_disposition") != fnd.AUTO:
+                continue
             act = f.get("action")
             if not act:
                 continue
@@ -185,6 +214,22 @@ def main():
                 act_hist[key] = {"count": prior + 1, "last": now}
                 task.event("action_failed", "P1",
                            {"check": f["check"], "ran": act, "error": str(e)})
+
+        # 不在规则表里的 kind 单独报 —— 否则「外置可审」会退化成
+        # 「外置但没人维护」：新加的检查项一直按默认 notify-only 走，
+        # 而没有任何东西提醒有人去给它定处置策略。
+        if unknown_kinds:
+            task.event("disposition_unknown_kind", "P2",
+                       {"kinds": sorted(unknown_kinds),
+                        "why": "不在 ops/dispositions.json 里，已按 notify-only 处理；"
+                               "请去表里给它定策略"})
+        # 被聚合压掉的如实交代，别让「压了 80 条」看起来像「只有 1 条」
+        sup = agg.suppressed()
+        if sup:
+            task.event("findings_aggregated", "P3",
+                       {"fingerprints": len(sup),
+                        "total_suppressed": sum(v["count"] - 1 for v in sup.values())})
+        agg.flush()
 
         # 动作历史落盘：退避要跨轮次才有意义
         try:

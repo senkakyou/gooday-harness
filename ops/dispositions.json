@@ -1,0 +1,29 @@
+{
+  "_readme": "发现的处置分类表。谁自动处置、谁只通知，在这里定，不写死在检查器里。",
+  "_why": [
+    "外置的理由：若由发现方自己打标，等于把「什么该人管」的判断权交给了发现方，",
+    "标错了就静默漏掉，而没有任何东西会说（灵犀 2026-09-08 指出）。",
+    "外置之后这张表本身可审、可 diff、可在门禁里被检查。"
+  ],
+  "_default": "notify-only",
+  "_default_why": [
+    "不在表里的一律 notify-only —— 【向人判断的方向失败】。",
+    "默认 auto 意味着对没想过的情况自动动手，那是最危险的一边。",
+    "但默认安全不等于可以不管：不在表里的 kind 会另报一条 P2，",
+    "否则「外置可审」会退化成「外置但没人维护」。"
+  ],
+  "rules": {
+    "finding:services":     {"disposition": "auto",        "why": "服务挂了重启，幂等可回滚"},
+    "finding:credentials":  {"disposition": "auto",        "why": "凭据属主修复，幂等"},
+    "finding:assets":       {"disposition": "notify-only", "why": "内容缺失要人判断是恢复还是下架"},
+    "finding:backups":      {"disposition": "notify-only", "why": "备份异常的处置动作都是不可逆的"},
+    "finding:db_health":    {"disposition": "notify-only", "why": "库有问题时自动动手风险最高"},
+    "finding:certs":        {"disposition": "notify-only", "why": "证书续期有独立 workflow，这里只报"},
+    "finding:config_drift": {"disposition": "notify-only", "why": "配置漂移要人确认哪边是对的"},
+    "finding:migration":    {"disposition": "notify-only", "why": "缺主的 workflow 要人决定装还是删"},
+    "finding:evolution":    {"disposition": "notify-only", "why": "闭环异常一律人判断"},
+    "finding:bot_inbox":    {"disposition": "notify-only", "why": "积压重启是钝器，见 coo-patrol 的教训"},
+    "finding:stale_process":{"disposition": "notify-only", "why": "重启会掩盖「为什么没重启」这个问题"},
+    "finding:tickets":      {"disposition": "notify-only", "why": "工单流异常一律人判断"}
+  }
+}
