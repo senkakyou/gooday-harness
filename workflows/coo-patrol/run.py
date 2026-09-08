@@ -26,7 +26,14 @@ from datetime import datetime, timezone, timedelta
 
 DB_PATH    = "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db"
 STATE_PATH = "/var/lib/gooday-harness/state/coo-patrol/state.json"
-DRY_RUN    = "--dry-run" in sys.argv
+# ⚠️ 【命令行开关，不是环境变量】。
+# 2026-09-08 我自己栽了：一直用 `DRY_RUN=1 python3 run.py` 测，
+# 以为在干跑，实际 DRY_RUN 恒为 False —— **4 条测试注入真发给了站长**。
+# 长得像环境变量的东西却只认 argv，是这类误用的温床。
+# 所以两种都认，并且【环境变量为真时也生效】：
+# 演练场景下宁可多干跑一次，也不要真发出去。
+DRY_RUN    = ("--dry-run" in sys.argv
+              or os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes"))
 
 LINGXI_ID, LINGXI_NAME = 20, "灵犀"
 OPTIMUS_ID = 21
@@ -57,6 +64,45 @@ PENDING_THRESHOLD_MIN = {"dispatch": 10, "message": 5}  # 派单类 10min / 消�
 ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
+
+
+
+# ═══ 并行输出：文字给人看，结构化 finding 进证据流 ═══════════════
+#
+# 迁移之前 coo-patrol 只产出一条发给站长的消息 —— 它每 5 分钟发现的东西
+# 不进 events/、不受 patrol 的退避与升级管、patrol 的巡检也看不到，
+# **第二层循环对这 8 项业务检查是瞎的**（灵犀 2026-09-08 指出根因：
+# 两条互不相通的输出路径，而可见性是基础设施问题，
+# 不该由「这条给人看还是给机器看」来决定）。
+#
+# 做法是**纯加法**：27 个 escalations.append 调用点一个都不动，
+# 换掉 escalations 这个对象本身。文字那一路照旧（人还在读，别断），
+# 同时多落一条结构化 finding。结构化跑对一周再考虑删文字那路。
+_HARNESS = "/opt/gooday-harness"
+sys.path.insert(0, os.path.join(_HARNESS, "packages", "trace"))
+sys.path.insert(0, os.path.join(_HARNESS, "packages", "finding"))
+try:
+    from trace import Task as _Task
+    import finding as _fnd
+except Exception as _e:          # 装不上就退回纯文字，不能让巡检本身挂掉
+    _Task, _fnd = None, None
+    print(f"[coo-patrol] ⚠️ 证据流不可用，退回纯文字输出: {_e}",
+          file=sys.stderr, flush=True)
+
+
+class _Escalations(list):
+    """append 时同时落一条结构化 finding。调用点无感。"""
+
+    def __init__(self):
+        super().__init__()
+        self.current = "coo"          # 当前正在跑哪一项，由 main 设置
+        self.findings = []
+
+    def append(self, text):
+        super().append(text)
+        self.findings.append({"check": self.current, "level": "P1",
+                              "what": str(text)[:120], "why": str(text),
+                              "fix": "见 workflows/coo-patrol/README.md"})
 
 
 def log(msg):
@@ -747,26 +793,69 @@ def check_claude_credential(state, actions, escalations):
 
 def main():
     state = load_state()
-    actions, escalations = [], []
-
-    # check_services 已由 workflows/patrol/checks/ 覆盖，此处不再重复（见 README）
-    # V3：调度器 on 时，工单卡单自愈由 dispatcher 接管，patrol 不再重复处理（避免双重重派/重启）
-    if not dispatch_is_on():
-        check_stuck_tickets(state, actions, escalations)
-    check_consistency(state, actions, escalations)
-    check_inbox_backlog(state, actions, escalations)
-    check_pending_timeout(state, actions, escalations)   # 项四：读了不办/卡死探测
-    check_dirty_state(state, actions, escalations)        # 项四：脏状态探测
-    # check_heartbeats 已由 workflows/patrol/checks/ 覆盖，此处不再重复（见 README）
-    # check_db_snapshot 已由 workflows/patrol/checks/ 覆盖，此处不再重复（见 README）
-    # check_db_health 已由 workflows/patrol/checks/ 覆盖，此处不再重复（见 README）
-    # check_cert_expiry 已由 workflows/patrol/checks/ 覆盖，此处不再重复（见 README）
-    check_claude_queue(state, actions, escalations)
-    # check_claude_credential 已由 workflows/patrol/checks/ 覆盖，此处不再重复（见 README）
-    check_dispatcher(state, actions, escalations)
-    check_daily_report(state, actions, escalations)
+    actions, escalations = [], _Escalations()
+    # 逐项跑，跑之前告诉 escalations 现在是哪一项 ——
+    # 这样包装对象落 finding 时才知道 check 名字（27 个调用点无需改）
+    CHECKS = [
+        ("stuck_tickets", check_stuck_tickets),
+        ("consistency", check_consistency),
+        ("inbox_backlog", check_inbox_backlog),
+        ("pending_timeout", check_pending_timeout),
+        ("dirty_state", check_dirty_state),
+        ("claude_queue", check_claude_queue),
+        ("dispatcher", check_dispatcher),
+        ("daily_report", check_daily_report),
+    ]
+    for _name, _fn in CHECKS:
+        escalations.current = _name
+        if _name == "stuck_tickets" and dispatch_is_on():
+            # V3：调度器 on 时工单卡单自愈由 dispatcher 接管，不重复处理
+            continue
+        _fn(state, actions, escalations)
+    escalations.current = "coo"
 
     save_state(state)
+
+    # ── 结构化 finding 落进证据流 ──────────────────────────────
+    # 与文字那一路并行，不替代它。分类走 ops/dispositions.json，
+    # 聚合走同一个 Aggregator —— **和 patrol 用同一套规则**，
+    # 否则两边各算各的，退避与降噪等于白做。
+    if _Task and _fnd and escalations.findings:
+        try:
+            rules, default, err = _fnd.load_table()
+            agg = _fnd.Aggregator("coo-patrol", window_min=60)
+            with _Task("coo-patrol-findings", actor="coo-patrol") as _t:
+                if err:
+                    _t.event("disposition_table_unreadable", "P1", {"error": err})
+                unknown = set()
+                fresh_n = 0
+                for f in escalations.findings:
+                    kind = f"finding:{f['check']}"
+                    disp, known = _fnd.classify(kind, rules, default)
+                    if not known:
+                        unknown.add(kind)
+                    fresh, _n = agg.see(f)
+                    if fresh:
+                        fresh_n += 1
+                        _t.event(kind, f["level"],
+                                 {"what": f["what"], "why": f["why"],
+                                  "fix": f["fix"], "disposition": disp})
+                if unknown:
+                    _t.event("disposition_unknown_kind", "P2",
+                             {"kinds": sorted(unknown),
+                              "why": "不在 ops/dispositions.json 里，已按默认处理"})
+                sup = agg.suppressed()
+                if sup:
+                    _t.event("findings_aggregated", "P3",
+                             {"fingerprints": len(sup),
+                              "total_suppressed": sum(v["count"] - 1 for v in sup.values())})
+                agg.flush()
+                _t.event("coo_patrol_summary", "P3",
+                         {"escalations": len(escalations), "new_findings": fresh_n})
+        except Exception as _e:
+            # 证据流出问题不能让巡检本身失败，但必须喊出来
+            print(f"[coo-patrol] ⚠️ 结构化 finding 落盘失败: {_e}",
+                  file=sys.stderr, flush=True)
 
     if not actions and not escalations:
         log("一切正常")

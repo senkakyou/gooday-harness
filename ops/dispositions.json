@@ -13,17 +13,85 @@
     "否则「外置可审」会退化成「外置但没人维护」。"
   ],
   "rules": {
-    "finding:services":     {"disposition": "auto",        "why": "服务挂了重启，幂等可回滚"},
-    "finding:credentials":  {"disposition": "auto",        "why": "凭据属主修复，幂等"},
-    "finding:assets":       {"disposition": "notify-only", "why": "内容缺失要人判断是恢复还是下架"},
-    "finding:backups":      {"disposition": "notify-only", "why": "备份异常的处置动作都是不可逆的"},
-    "finding:db_health":    {"disposition": "notify-only", "why": "库有问题时自动动手风险最高"},
-    "finding:certs":        {"disposition": "notify-only", "why": "证书续期有独立 workflow，这里只报"},
-    "finding:config_drift": {"disposition": "notify-only", "why": "配置漂移要人确认哪边是对的"},
-    "finding:migration":    {"disposition": "notify-only", "why": "缺主的 workflow 要人决定装还是删"},
-    "finding:evolution":    {"disposition": "notify-only", "why": "闭环异常一律人判断"},
-    "finding:bot_inbox":    {"disposition": "notify-only", "why": "积压重启是钝器，见 coo-patrol 的教训"},
-    "finding:stale_process":{"disposition": "notify-only", "why": "重启会掩盖「为什么没重启」这个问题"},
-    "finding:tickets":      {"disposition": "notify-only", "why": "工单流异常一律人判断"}
+    "finding:services": {
+      "disposition": "auto",
+      "why": "服务挂了重启，幂等可回滚"
+    },
+    "finding:credentials": {
+      "disposition": "auto",
+      "why": "凭据属主修复，幂等"
+    },
+    "finding:assets": {
+      "disposition": "notify-only",
+      "why": "内容缺失要人判断是恢复还是下架"
+    },
+    "finding:backups": {
+      "disposition": "notify-only",
+      "why": "备份异常的处置动作都是不可逆的"
+    },
+    "finding:db_health": {
+      "disposition": "notify-only",
+      "why": "库有问题时自动动手风险最高"
+    },
+    "finding:certs": {
+      "disposition": "notify-only",
+      "why": "证书续期有独立 workflow，这里只报"
+    },
+    "finding:config_drift": {
+      "disposition": "notify-only",
+      "why": "配置漂移要人确认哪边是对的"
+    },
+    "finding:migration": {
+      "disposition": "notify-only",
+      "why": "缺主的 workflow 要人决定装还是删"
+    },
+    "finding:evolution": {
+      "disposition": "notify-only",
+      "why": "闭环异常一律人判断"
+    },
+    "finding:bot_inbox": {
+      "disposition": "notify-only",
+      "why": "积压重启是钝器，见 coo-patrol 的教训"
+    },
+    "finding:stale_process": {
+      "disposition": "notify-only",
+      "why": "重启会掩盖「为什么没重启」这个问题"
+    },
+    "finding:tickets": {
+      "disposition": "notify-only",
+      "why": "工单流异常一律人判断"
+    },
+    "finding:stuck_tickets": {
+      "disposition": "notify-only",
+      "why": "工单卡住要人判断，重启是钝器（见 coo-patrol 教训）"
+    },
+    "finding:consistency": {
+      "disposition": "notify-only",
+      "why": "数据不一致的修法因情况而异，不能自动"
+    },
+    "finding:inbox_backlog": {
+      "disposition": "notify-only",
+      "why": "积压重启会掩盖原因"
+    },
+    "finding:pending_timeout": {
+      "disposition": "notify-only",
+      "why": "读了不办要人看是谁的问题"
+    },
+    "finding:dirty_state": {
+      "disposition": "notify-only",
+      "why": "脏状态的正确值只有人知道"
+    },
+    "finding:claude_queue": {
+      "disposition": "notify-only",
+      "why": "并发槽异常多半是上游问题"
+    },
+    "finding:dispatcher": {
+      "disposition": "notify-only",
+      "why": "调度器重启由 patrol 的 services 项负责"
+    },
+    "finding:daily_report": {
+      "disposition": "notify-only",
+      "why": "日报没发要人确认是不是该补发"
+    }
   }
 }
