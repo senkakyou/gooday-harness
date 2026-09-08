@@ -17,7 +17,8 @@ namespace GoodayTools.Controllers;
 [ApiController]
 [Route("api/admin")]
 [Authorize(Roles="admin")]  // 整个控制器都需要 admin 角色，不需要每个方法单独标注
-public class AdminController(AppDbContext db, IWebHostEnvironment env, NotificationService notif) : ControllerBase {
+public class AdminController(AppDbContext db, IWebHostEnvironment env, NotificationService notif,
+    UploadRedirectCache redirectCache) : ControllerBase {
 
     int CurrentUserId => int.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
 
@@ -148,13 +149,16 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
     private static string NormalizeName(string s) =>
         s.Normalize(System.Text.NormalizationForm.FormC).Trim();
 
-    // 【全站扫引用时的路径边界字符】。/uploads/xxx 的引用一律扫到这些字符为止，
-    // 所以名字里带了它们，引用就会被【从中间截断】：
-    // 后果不是"链接不好看"，而是 BuildFileUsageAsync 认不出这个文件被谁用着 →
-    // 它被列为空闲 → 「一键清理空闲文件」把它删了。名字里带空格就足够触发。
-    private const string RefBreakingChars = " \t\"'>)(][\\,;?#%";
-    // 文件系统层面不能要的
-    private const string FsBreakingChars  = "/\\:*?\"<>|";
+    // 名字里【只允许】这些：汉字/字母/数字 + 连字符、下划线、点。
+    //
+    // 为什么是白名单而不是黑名单（灵犀评审第 7 条）：黑名单永远漏。
+    // 我先漏了空格，补上后又漏了 U+200B 零宽空格、U+202E 这类 Unicode 格式字符——
+    // 它们 char.IsControl 不认、肉眼看不出，能造出两个"同名"文件夹。
+    // 漏的代价是具体的：名字里带了扫描正则的边界字符（空白、引号、括号、逗号、
+    // 分号、? # %），全站扫引用就会把路径【从中间截断】→ 这个文件被判成没人用 →
+    // 「一键清理空闲文件」把它删掉。
+    private static bool IsNameChar(char c) =>
+        char.IsLetterOrDigit(c) || c is '-' or '_' or '.';
 
     // 校验单段文件名/文件夹名（中文合法）。返回 null=合法，否则返回中文原因。
     private static string? ValidateSegment(string seg, string what) {
@@ -164,10 +168,15 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         if (seg.StartsWith('.'))                  return $"{what}不能以点开头（会变成隐藏文件）";
         if (seg.EndsWith('.'))                    return $"{what}不能以点结尾";
         foreach (var c in seg) {
-            if (char.IsControl(c))                return $"{what}不能包含控制字符";
-            if (FsBreakingChars.Contains(c))      return $"{what}不能包含 / \\ : * ? \" < > | 这些字符";
-            if (char.IsWhiteSpace(c))             return $"{what}不能包含空格（引用扫描以空白为边界，带空格的路径会被截断，文件会被误判成空闲而遭清理）";
-            if (RefBreakingChars.Contains(c))     return $"{what}不能包含 \" ' ( ) [ ] , ; ? # % 这些字符（同上，会截断引用）";
+            if (IsNameChar(c)) continue;
+            if (char.IsControl(c))
+                return $"{what}不能包含控制字符";
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c)
+                    == System.Globalization.UnicodeCategory.Format)
+                return $"{what}含不可见的 Unicode 格式字符（U+{(int)c:X4}，如零宽空格/换向符）——" +
+                       $"肉眼看不出来，会造出两个「同名」文件夹";
+            return $"{what}只能用汉字、字母、数字和 - _ . （出现了 '{c}'）：" +
+                   $"其它字符会在引用扫描或 URL 里把路径截断，文件会被误判成空闲而遭清理";
         }
         if (ReservedNames.Contains(Path.GetFileNameWithoutExtension(seg)))
             return $"{what}用了系统保留名（CON/PRN/COM1…），解压到 Windows 会失败";
@@ -207,6 +216,9 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         var ext = Path.GetExtension(orig);
         if (string.IsNullOrEmpty(ext) || !AllowedUploadExts.Contains(ext))
             return BadRequest(new { message="不支持的文件类型" });
+        // 【削名而不是拒收】：用户电脑上叫「季度报告 v2.pdf」很正常，
+        // 为了命名规则把上传打回去是拿规则惩罚用户。削成合法名再存，回包里告诉他叫什么了。
+        orig = SanitizeSegment(Path.GetFileNameWithoutExtension(orig)) + ext;
         if (ValidateSegment(orig, "文件名") is string nerr) return BadRequest(new { message=nerr });
 
         return await SaveUploadAsync(file, dir, orig, ext);
@@ -227,6 +239,7 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         var ext = Path.GetExtension(orig);
         if (string.IsNullOrEmpty(ext) || !AllowedVideoExts.Contains(ext))
             return BadRequest(new { message="视频只支持 mp4 / webm（其它格式请先转码）" });
+        orig = SanitizeSegment(Path.GetFileNameWithoutExtension(orig)) + ext;   // 同上：削名不拒收
         if (ValidateSegment(orig, "文件名") is string nerr) return BadRequest(new { message=nerr });
 
         return await SaveUploadAsync(file, dir, orig, ext);
@@ -269,20 +282,27 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
                 if (!cur.Contains(label)) map[key] = cur + "；" + label;
             } else map[key] = label;
         }
-        // 从任意文本中提取所有 /uploads/xxx 引用（覆盖直接 URL、Markdown ![](...)、[img:...] 等写法）
+        // 从任意文本中提取所有 /uploads/xxx 引用（覆盖直接 URL、Markdown ![](...)、[img:...] 等写法）。
+        // 【必须和改写用的是同一个正则】（UploadRefRe）：原来这里的边界比改写宽，
+        // 允许 , ; ? # 进路径。私信里写「下载 /uploads/tools/X/X.zip，有问题找我」，
+        // 扫描抓到的 key 就带着那个中文逗号后的尾巴，跟真文件对不上 →
+        // 这个文件被判成空闲 → 「一键清理」会删掉它。（2026-09-08 灵犀评审第 1 条）
         void Scan(string? text, string label) {
             if (string.IsNullOrEmpty(text)) return;
-            foreach (Match m in Regex.Matches(text, @"/uploads/([^\s""'>)\]\\]+)"))
-                Add(byRel, Uri.UnescapeDataString(m.Groups[1].Value), label);
+            foreach (var rel in RefsIn(text))
+                Add(byRel, rel, label);
         }
 
         // 工具：在线运行 URL（即工具本体 HTML）、说明文档内嵌图片、下载文件、视频讲解
         var tools = await db.Tools
-            .Select(t => new { t.Name, t.OnlineUrl, t.DownloadFileName, t.ReadmeMarkdown, t.VideoUrl })
+            .Select(t => new { t.Name, t.OnlineUrl, t.DownloadFileName, t.ReadmeMarkdown, t.VideoUrl, t.Description })
             .ToListAsync();
         foreach (var t in tools) {
             Scan(t.OnlineUrl, $"在线工具：{t.Name}");
             Scan(t.ReadmeMarkdown, $"工具说明：{t.Name}");
+            // Description 一直在被 RewriteReferences 改写，却从来没被扫描过——
+            // 把图片写在简介里的工具，那张图一直处于「待删」状态（灵犀评审第 2 条）
+            Scan(t.Description, $"工具简介：{t.Name}");
             // 【视频讲解必须扫】：漏了它，讲解视频会被判成空闲文件，
             // 后台「一键清理空闲文件」按一下就把所有讲解删光了。外链自动跳过（Scan 只匹配 /uploads）
             Scan(t.VideoUrl, $"视频讲解：{t.Name}");
@@ -409,6 +429,43 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         return Ok(new { files, dirs });
     }
 
+    // 路径里有没有软链接成分。TryResolveUnder 用的 GetFullPath 【只做字符串规范化，
+    // 不解析软链】——uploads 里若有一个指向别处的软链目录，"看起来在 uploads 里"
+    // 的路径其实能写到系统任何地方（灵犀评审第 9-③ 条）。
+    private static bool HasSymlinkComponent(string root, string full) {
+        var r = Path.GetFullPath(root);
+        var cur = full;
+        while (cur != null && cur.Length >= r.Length) {
+            try {
+                if (System.IO.File.Exists(cur) || Directory.Exists(cur)) {
+                    var attr = System.IO.File.GetAttributes(cur);
+                    if (attr.HasFlag(FileAttributes.ReparsePoint)) return true;
+                }
+            } catch { /* 读不到属性就当它可疑不了，交给后续的存在性检查 */ }
+            if (string.Equals(cur, r, StringComparison.Ordinal)) break;
+            cur = Path.GetDirectoryName(cur);
+        }
+        return false;
+    }
+
+    // 同目录下有没有"只差大小写"的同名项。Linux 放得下 a.html 和 A.html，
+    // 但这些文件将来会被打包发给 Windows/mac 用户，在那边就撞成一个。
+    private static bool ExistsIgnoreCase(string full) {
+        var dir = Path.GetDirectoryName(full);
+        if (dir == null || !Directory.Exists(dir)) return false;
+        var name = Path.GetFileName(full);
+        return Directory.EnumerateFileSystemEntries(dir)
+            .Any(e => string.Equals(Path.GetFileName(e), name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // 自底向上删掉空目录（搬空的老目录、回滚后残留的新目录）。root 本身不动。
+    private static void CleanEmptyDirs(string root) {
+        if (!Directory.Exists(root)) return;
+        foreach (var d in Directory.GetDirectories(root, "*", SearchOption.AllDirectories)
+                     .OrderByDescending(x => x.Length))
+            try { if (!Directory.EnumerateFileSystemEntries(d).Any()) Directory.Delete(d); } catch { }
+    }
+
     // 把 rel 安全解析为 uploads 下的绝对路径，防止路径穿越。越界返回 false。
     private static bool TryResolveUnder(string root, string? rel, out string full) {
         var r = Path.GetFullPath(root);
@@ -454,6 +511,7 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         }
         foreach (var d in dupName) byName.Remove(d);
 
+        var uploadRoot = Path.Combine(env.WebRootPath, "uploads");
         string? Fix(string? s) => string.IsNullOrEmpty(s) ? s : ApplyRefMap(s!, map);
 
         foreach (var t in await db.Tools.ToListAsync()) {
@@ -464,7 +522,12 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
             if (!string.IsNullOrEmpty(t.DownloadFileName)) {
                 var dl = t.DownloadFileName!.Replace('\\', '/').TrimStart('/');
                 if (map.TryGetValue(dl, out var nw)) t.DownloadFileName = nw;            // 带子目录形式
-                else if (byName.TryGetValue(dl, out var nw2)) t.DownloadFileName = nw2;  // 纯文件名形式 → 补成完整相对路径
+                else if (byName.TryGetValue(dl, out var nw2)
+                         // 【只有这个裸文件名在老位置确实已经没有了，才认它是"被搬走的那个"】。
+                         // 不加这条：别的工具搬走一个同名文件，就会把【本工具】的下载
+                         // 指到别人的包上——用户下到的是另一个工具（灵犀评审第 4 条）。
+                         && !System.IO.File.Exists(Path.Combine(uploadRoot, dl.Replace('/', Path.DirectorySeparatorChar))))
+                    t.DownloadFileName = nw2;                                            // 纯文件名形式 → 补成完整相对路径
             }
             // 归置后 Folder 跟着文件走：它指向的目录如果整体搬了，字段也要跟上
             if (!string.IsNullOrEmpty(t.Folder)) {
@@ -549,6 +612,15 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
                 all.Add(add);
             }
         }
+        // 兜底：任何指向自己的行都清掉。上面的链式改写理论上不会留下这种行，
+        // 但真留下一条，且那个文件哪天被删了，浏览器就会在同一个地址上无限打转
+        foreach (var r in all.Where(r => r.OldPath == r.NewPath).ToList()) {
+            db.UploadRedirects.Remove(r);
+            all.Remove(r);
+        }
+        // 表变了，清缓存。【放在这里而不是各个调用点】——要求调用方记得清的结构，
+        // 就是在等下一次有人忘；忘了的表现是"搬完之后老链接还是断的"，很难查
+        redirectCache.Invalidate();
     }
 
     public record RenameFileDto(string path, string newName);
@@ -733,20 +805,12 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
     // 空格和 ()[]，;?#% 一律换成连字符——不是为了好看：
     // 103 个工具里有 74 个名字带空格（"PDF 转换工具"），原样做目录名的话，
     // 全站扫引用会在空格处断掉，这些文件会被当成没人用的空闲文件清理掉。
-    // 中文标点里当分隔符用的那些：留在目录名里只是难认（"照片量体-·-人体建模"），
-    // 一并压成连字符。注意【不动点号】——llama.cpp、Alpine.js 的点是名字的一部分
-    private const string CjkSeparatorChars = "·：、，。；！？（）【】《》“”‘’—…⇄↔→←";
-
     private static string SanitizeSegment(string raw) {
         var s = NormalizeName(raw ?? "");
         var sb = new System.Text.StringBuilder();
-        foreach (var c in s) {
-            if (char.IsControl(c)) continue;
-            if (char.IsWhiteSpace(c) || FsBreakingChars.Contains(c)
-                || RefBreakingChars.Contains(c) || CjkSeparatorChars.Contains(c))
-                sb.Append('-');
-            else sb.Append(c);
-        }
+        // 白名单之外的一律压成连字符（空格、中文标点、箭头、括号…），
+        // 和 ValidateSegment 同一套判定——否则会出现"自己生成的名字自己不收"
+        foreach (var c in s) sb.Append(IsNameChar(c) ? c : '-');
         // 连续的连字符收成一个，首尾的去掉（"CSS Flexbox/Grid 可视化工具" → "CSS-Flexbox-Grid-可视化工具"）
         var o = Regex.Replace(sb.ToString(), "-{2,}", "-").Trim('-').Trim().Trim('.').Trim('-').Trim();
         if (o.Length > 60) {
@@ -921,10 +985,23 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
             if (bad) continue;
 
             if (!TryResolveUnder(root, from, out var fromFull) || !System.IO.File.Exists(fromFull)) {
-                errors.Add($"{from}：源文件不存在"); continue;
+                // 磁盘上若存的是分解形(NFD)的名字，上面 NormalizeName 转成 NFC 后就对不上了。
+                // 报"不存在"没错但看不懂，点出这一层，省得对着肉眼一样的名字发懵
+                var hint = Directory.Exists(Path.GetDirectoryName(fromFull) ?? root)
+                    && Directory.EnumerateFiles(Path.GetDirectoryName(fromFull) ?? root)
+                        .Any(f => Path.GetFileName(f).Normalize(System.Text.NormalizationForm.FormC)
+                                  == Path.GetFileName(from))
+                    ? "（同目录下有个名字长得一样的文件，疑似 Unicode 编码不一致 NFD/NFC）" : "";
+                errors.Add($"{from}：源文件不存在{hint}"); continue;
             }
             if (!TryResolveUnder(root, to, out var toFull)) { errors.Add($"{to}：目标越界"); continue; }
-            if (System.IO.File.Exists(toFull) || Directory.Exists(toFull)) { errors.Add($"{to}：目标已存在"); continue; }
+            if (HasSymlinkComponent(root, toFull) || HasSymlinkComponent(root, fromFull)) {
+                errors.Add($"{to}：路径里有软链接，拒绝（GetFullPath 不解析软链，能绕出 uploads）"); continue;
+            }
+            // 【目标存在性按忽略大小写比】。Linux 上 a.html 和 A.html 是两个文件，
+            // 放得进去；但这堆文件将来会被打包发给 Windows/mac 用户，在那边就撞成一个
+            if (System.IO.File.Exists(toFull) || Directory.Exists(toFull)
+                || ExistsIgnoreCase(toFull)) { errors.Add($"{to}：目标已存在（大小写不同也算）"); continue; }
             if (!seenFrom.Add(from)) { errors.Add($"{from}：同一个源文件出现了两次"); continue; }
             if (!seenTo.Add(to))     { errors.Add($"{to}：两条移动指向同一个目标"); continue; }
             pairs.Add((from, to, fromFull, toFull));
@@ -936,7 +1013,16 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         if (errors.Count > 0)
             return BadRequest(new { message = $"清单有 {errors.Count} 处问题，一个都没执行", errors = errors.Take(50) });
 
-        // ---- 第二遍：搬文件。中途失败则原样退回 ----
+        // ---- 第二遍：【先把旧路径映射落库，再动文件】----
+        // 顺序是刻意的（灵犀评审第 3 条）：文件还在原处时这些映射行根本命中不了（静态
+        // 文件优先），所以提前写没有副作用；而一旦文件搬完、后面的改库步骤失败，
+        // 至少这张兜底网已经在了——否则就是「文件走了、库没改、301 表也空」，
+        // 110 条引用全断且没有任何兜底。
+        var redirectMap = pairs.ToDictionary(p => p.from, p => p.to, StringComparer.Ordinal);
+        await RecordRedirectsAsync(redirectMap);
+        await db.SaveChangesAsync();
+
+        // ---- 第三遍：搬文件。中途失败则原样退回 ----
         var done = new List<(string from, string to, string fromFull, string toFull)>();
         try {
             foreach (var p in pairs) {
@@ -950,25 +1036,40 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
                 try { System.IO.File.Move(p.toFull, p.fromFull); }
                 catch { undoFailed.Add(p.to); }   // 退不回来的必须报出来，不能吞
             }
+            // 退回后把刚才预写的映射行也撤掉，别留下指向空路径的死映射
+            if (undoFailed.Count == 0) {
+                db.UploadRedirects.RemoveRange(
+                    db.UploadRedirects.Where(r => redirectMap.Keys.Contains(r.OldPath)));
+                await db.SaveChangesAsync();
+            }
+            CleanEmptyDirs(root);   // 已经建出来的空目录不留在磁盘上
             return StatusCode(500, new {
-                message = $"搬到第 {done.Count + 1} 个时失败：{ex.Message}。数据库未改动。",
+                message = $"搬到第 {done.Count + 1} 个时失败：{ex.Message}。数据库引用未改动。",
                 rolledBack = done.Count - undoFailed.Count,
                 undoFailed,
             });
         }
 
-        // ---- 第三遍：改引用 + 记旧路径映射（一次批量，不逐条扫全库）----
-        await RewriteReferencesBatchAsync(pairs.Select(p => (p.from, p.to)));
-
-        // ---- 第四遍：写回每个工具的归置目录 ----
-        foreach (var f in folders) {
-            NormalizeRelDir(f.Folder, out var clean);
-            var tool = await db.Tools.FindAsync(f.ToolId);
-            if (tool != null) { tool.Folder = string.IsNullOrEmpty(clean) ? null : clean; tool.UpdatedAt = DateTime.UtcNow; }
+        // ---- 第四遍：改引用 + 写回归置目录，同一个事务里提交 ----
+        // 两件事必须同生共死：只改了引用没写 Folder，下次归置会把文件当"散在外面的"再搬一次
+        await using (var tx = await db.Database.BeginTransactionAsync()) {
+            await RewriteReferencesBatchAsync(pairs.Select(p => (p.from, p.to)));
+            foreach (var f in folders) {
+                NormalizeRelDir(f.Folder, out var clean);
+                var tool = await db.Tools.FindAsync(f.ToolId);
+                if (tool != null) { tool.Folder = string.IsNullOrEmpty(clean) ? null : clean; tool.UpdatedAt = DateTime.UtcNow; }
+            }
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
         }
-        await db.SaveChangesAsync();
+        CleanEmptyDirs(root);   // 搬空的老目录（zip/ 之类）不留着占位
 
-        return Ok(new { moved = pairs.Count, folders = folders.Length });
+        // 库里存的是纯文件名、而同名文件不止一处的，改写时会跳过——静默跳过等于埋雷，报出来
+        var ambiguous = pairs.Select(p => Path.GetFileName(p.from))
+            .GroupBy(n => n, StringComparer.Ordinal).Where(g => g.Count() > 1)
+            .Select(g => g.Key).ToList();
+
+        return Ok(new { moved = pairs.Count, folders = folders.Length, ambiguousNames = ambiguous });
     }
 
     // GET /api/admin/stats —— 后台概览统计数据

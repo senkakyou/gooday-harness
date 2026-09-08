@@ -80,6 +80,8 @@ builder.Services.AddScoped<TokenService>();        // 生成/解析 JWT token
 builder.Services.AddScoped<SubscriptionService>(); // 订阅/付费会员业务逻辑
 builder.Services.AddScoped<NotificationService>(); // 站内通知
 builder.Services.AddScoped<ScheduleOcrService>();  // 课表照片识别（视觉模型，缺省 mock）
+// uploads 旧链接映射：单例内存缓存，写方显式失效（见 UploadRedirectCache 注释）
+builder.Services.AddSingleton<UploadRedirectCache>();
 builder.Services.AddHttpClient("vision");          // 识别服务出站请求
 
 // 注册控制器（所有 Controller 类自动被发现）
@@ -121,6 +123,15 @@ builder.Services.AddRateLimiter(opt => {
         RateLimitPartition.GetFixedWindowLimiter(ClientIpOf(ctx),
             _ => new FixedWindowRateLimiterOptions {
                 PermitLimit = 10, Window = TimeSpan.FromHours(1), QueueLimit = 0
+            }));
+    // 匿名计数（视频讲解播放数）：每 IP 每小时 60 次。
+    // 比 anon-write 松，是因为它不写磁盘也不产生内容，只 +1；
+    // 但仍必须有闸——不限流的话一条 curl 循环既能把播放数刷成任意值，
+    // 也能拿 SQLite 写入当放大器。60 次/小时对真人看视频绰绰有余。
+    opt.AddPolicy("anon-count", ctx =>
+        RateLimitPartition.GetFixedWindowLimiter(ClientIpOf(ctx),
+            _ => new FixedWindowRateLimiterOptions {
+                PermitLimit = 60, Window = TimeSpan.FromHours(1), QueueLimit = 0
             }));
 });
 
@@ -176,27 +187,40 @@ _ctp.Mappings[".z03"] = "application/octet-stream";
 _ctp.Mappings[".apk"] = "application/vnd.android.package-archive";
 app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = _ctp });
 
-// ---- uploads 老链接兜底：文件搬家后，站外的旧地址 301 到新地址 ----
+// ---- uploads 老链接兜底：文件搬家后，站外的旧地址 302 到新地址 ----
 // 站内引用（工具字段、论坛帖子、页面内部引用）在搬家时已被 RewriteReferences 改掉，
-// 但用户收藏夹里的、别处贴过的、搜索引擎收录的地址改不了。
-// 【没有这一段它们不会 404，而是落到下面的 MapFallbackToFile 拿到 200 的 index.html】——
-// 那更糟：下载下来是个 HTML 首页，用户只会以为文件坏了。
+// 但用户收藏夹里的、别处贴过的、搜索引擎收录的地址改不了——没有这段它们就是死链。
 // 位置必须在 UseStaticFiles 之后：文件真在时静态中间件已经返回，走不到这里。
+//
+// 顺带把「找不到」的回法统一成 404。实测（2026-09-08）：带扩展名的缺失路径本来就
+// 404（MapFallbackToFile 的 nonfile 约束挡住了），但**不带扩展名的会拿到 200 的
+// index.html**——比如 /uploads/DBMigrate-Pro-v0.2 这类没后缀的下载文件，
+// 存下来是个 HTML 首页。这里显式 404，两种情况都诚实。
 app.Use(async (ctx, next) => {
     var p = ctx.Request.Path.Value ?? "";
     if (p.StartsWith("/uploads/", StringComparison.OrdinalIgnoreCase)) {
         var rel = Uri.UnescapeDataString(p["/uploads/".Length..]);
         if (rel.Length > 0) {
-            var dbc = ctx.RequestServices.GetRequiredService<AppDbContext>();
-            var hit = await dbc.UploadRedirects.AsNoTracking()
-                .FirstOrDefaultAsync(r => r.OldPath == rel);
-            if (hit != null) {
+            // 【整张表进内存缓存】。这段在限流中间件之前，匿名请求打不中就查一次库，
+            // 等于给了一个免费的放大器；表才一百多行，缓存住就没这回事了。
+            // 后台改名/移动/归置时 UploadRedirectCache.Invalidate() 清缓存。
+            var cache = ctx.RequestServices.GetRequiredService<UploadRedirectCache>();
+            var map = await cache.GetAsync();
+            var hit = map.TryGetValue(rel, out var to) ? to : null;
+            // 指向自己的行跳过——真按它跳会让浏览器原地打转
+            if (hit != null && hit != rel) {
                 // 目标路径按段转义：中文不转义也能用，但文件名里真有 % # ? 时地址会断
-                var target = "/uploads/" + string.Join('/', hit.NewPath.Split('/').Select(Uri.EscapeDataString));
-                ctx.Response.Redirect(target, permanent: true);
+                var target = "/uploads/" + string.Join('/', hit.Split('/').Select(Uri.EscapeDataString));
+                // 【302 不是 301】：映射是可变的（文件可以再搬一次），而 301 会被浏览器
+                // 和搜索引擎永久缓存——之后再改映射也叫不回那些客户端（灵犀评审第 5 条）
+                ctx.Response.Redirect(target, permanent: false);
                 return;
             }
         }
+        // 【走到这里 = 这个文件真的没有】。不放行到下面的 MapFallbackToFile：
+        // 无扩展名的路径会被它当成前端路由，回一个 200 的 index.html。缺文件就该是 404。
+        ctx.Response.StatusCode = 404;
+        return;
     }
     await next();
 });

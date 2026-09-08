@@ -54,6 +54,7 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
     // 视频讲解播放计数 +1。无需登录（讲解本身就是公开的引流内容）。
     // 前端在真正开始播放时才打这一下，不是打开详情就算——否则数字等于浏览量，白记。
     [HttpPost("{slug}/video-play")]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("anon-count")]  // 免登录写库端点必须有闸
     public async Task<IActionResult> VideoPlay(string slug)
     {
         var tool = await db.Tools.FirstOrDefaultAsync(t => t.Slug == slug && t.IsPublished);

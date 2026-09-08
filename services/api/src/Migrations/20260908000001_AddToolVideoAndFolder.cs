@@ -34,8 +34,7 @@ namespace GoodayTools.Migrations
 
             // ---- 文件搬家后的旧链接兜底 ----
             // 站内引用由 RewriteReferencesAsync 自动改写，站外的（收藏夹、别处贴的链接、
-            // 搜索引擎）改不了。没有这张表它们会落到 MapFallbackToFile 拿到 200 的
-            // index.html——比 404 更糟：下下来是个 HTML 首页，用户以为文件坏了。
+            // 搜索引擎）改不了，没有这张表它们搬家后就是死链。
             migrationBuilder.CreateTable(
                 name: "UploadRedirects",
                 columns: table => new
