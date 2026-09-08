@@ -38,7 +38,11 @@ CLIENT_PAT = re.compile(r"^MAX_CONTENT\s*=\s*(\d+)", re.M)
 # 全都不认识 4000 这个数，产的还都是长文本（日报、财报、巡检报告）。
 # 吃掉那份评审的 bug 在三个地方原样活着，而规则报绿。
 # 【窟窿不在调用图，在作用域】——2026-09-08 灵犀评审指出。
-SENDER_PAT = re.compile(r"/api/messages/")
+# 谁在产生一条私信。两条路都要认：
+#   · 走接口   POST /api/messages/...
+#   · 【绕开接口直接写库】 INSERT INTO PrivateMessages —— dev-requests 就是这么干的，
+#     它连服务端那道 4000 判定都碰不到，G21 第一版完全看不见它。
+SENDER_PAT = re.compile(r"/api/messages/|INSERT\s+INTO\s+PrivateMessages", re.I)
 SCAN_DIRS = ("packages", "workflows", "services")
 # 认可的兜底方式：自己声明上限，或者复用 botkit 的分段能力。
 #
@@ -96,7 +100,9 @@ def check(ctx):
             continue
         if BORROWS_PAT.search(src):
             continue
-        yield ("ERROR", f"{path} 直发 /api/messages/ 但不认识 {server_limit} 字上限",
+        how = ("直接写 PrivateMessages 表" if "INSERT" in src.upper()
+               else "直发 /api/messages/")
+        yield ("ERROR", f"{path} {how}，但不认识 {server_limit} 字上限",
                f"超过 {server_limit} 字的内容会被服务端判 400 整条丢掉。"
                "复用 packages/botkit/outbound 的 MAX_CONTENT 与 split()，"
                "别在这里复制第二份数字")
@@ -125,6 +131,13 @@ def check_frontend(ctx, rest_limit):
 
     所以判据必须按【端点】分，不能按「有几个数字」分。
     识别方式是文件里 import 了谁：`api/messages` → REST；`signalr` → Hub。
+
+    【已知盲点，写下来不假装没有】（灵犀 2026-09-08 第四轮指出）：
+    靠 import 认端点，就依赖 import 存在。裸 `fetch('/api/messages')`、
+    axios 直连、或者把发送封装进一个没有可识别 import 的组件，都会被漏判。
+    所以下面额外认一条兜底：文件里直接出现 `/api/messages` 字面量也算 REST。
+    再绕过去的写法本规则确实看不见 —— 这是按 import 分类的代价，
+    比按数字分准，但不是没有代价。
     """
     import os
     root = ctx.path(WEB)
@@ -147,7 +160,7 @@ def check_frontend(ctx, rest_limit):
             limits = [int(x) for x in MAXLEN_PAT.findall(src) if int(x) >= 100]
             if not limits:
                 continue
-            if "api/messages" in src:
+            if "api/messages" in src or "/api/messages" in src:
                 who, cap = "私信 REST 接口", rest_limit
             elif "signalr" in src.lower():
                 if hub_limit is None:

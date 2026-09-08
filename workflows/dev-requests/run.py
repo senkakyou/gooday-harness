@@ -16,6 +16,10 @@ import json
 import sys
 import os
 
+# 消息长度上限复用 packages/botkit/outbound —— 不在这里写第二份数字（G03 / G21）
+sys.path.insert(0, "/opt/gooday-harness/packages/botkit")
+from outbound import MAX_CONTENT                  # noqa: E402
+
 DB = "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db"
 RUYI_ID = 23
 RUYI_NAME = "如意"
@@ -77,7 +81,10 @@ def call_claude_for_reply(req):
              "--input-format=stream-json", "--output-format=stream-json",
              "--system-prompt", SCREENING_SYSTEM_PROMPT],
             input=json.dumps(msg), capture_output=True, text=True, timeout=60,
-            cwd="/opt/gooday"
+            # cwd 曾写死 "/opt/gooday" —— 那个目录 2026-09-07 已改名为 /opt/goodayback，
+            # 现在不存在，subprocess 会抛 FileNotFoundError，被下面的 except 吃掉，
+            # **于是每一次都走降级模板**，而降级模板还把自己说成灵犀（见下）。
+            cwd=os.path.dirname(os.path.abspath(__file__))
         )
         text = ""
         for line in result.stdout.splitlines():
@@ -90,13 +97,29 @@ def call_claude_for_reply(req):
             except Exception:
                 pass
         reply = text.strip()
-        return reply[:990] if len(reply) > 990 else reply
+        # 这条走【直接写库】，不经 API，所以服务端那道 4000 的判定根本不生效，
+        # 也没有分段可用（一行 INSERT 就是一条消息）。所以这里仍然要截断。
+        # 但两处要改（2026-09-08 灵犀第四轮扫出来的）：
+        #   1. 上限跟 packages/botkit/outbound 的 MAX_CONTENT 走，不再手写 990 ——
+        #      990 是哪来的没人说得清，而 UI 和 API 都按 4000；
+        #   2. **截断要说出来**。原来是 `reply[:990]` 悄悄切掉，
+        #      客户看到的是一句没说完的话，而且不知道它没说完。
+        if len(reply) > MAX_CONTENT:
+            keep = MAX_CONTENT - 40
+            print(f"[handle] ⚠️ 回复 {len(reply)} 字超过上限 {MAX_CONTENT}，"
+                  f"截断至 {keep}", flush=True)
+            reply = reply[:keep] + "\n\n（回复过长已截断，如需完整内容请回复我）"
+        return reply
     except Exception as e:
         print(f"[handle] Claude 调用失败: {e}")
         # 降级：返回通用模板
         return (
             f"您好 {req['name']}！感谢提交需求「{req['title']}」😊\n\n"
-            f"已收到，我是灵犀，Gooday 的需求对接，会尽快评估并回复您，请保持 {req['contact_type']} 畅通。"
+            # 这里原来写的是「我是灵犀」，而发信人是【如意】（RUYI_ID=23）——
+            # 客户收到的是一条自称错了名字的消息。系统提示词里明写「自我介绍为
+            # 我是如意，Gooday 的前台」，降级模板却没跟上。
+            f"已收到，我是{RUYI_NAME}，Gooday 的前台，会尽快评估并回复您，"
+            f"请保持 {req['contact_type']} 畅通。"
         )
 
 

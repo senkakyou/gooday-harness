@@ -245,8 +245,11 @@ def main():
     report = build_report(ticket_data, project_data, finance_data, notifications)
     print(f"[lingxi-daily] 报告（{len(report)} 字）:\n{report[:300]}...", flush=True)
 
-    if len(report) > 990:
-        report = report[:987] + "..."
+    # 【不再截断】。这里原来是 `if len(report) > 990: report = report[:987] + "..."` ——
+    # 990 是分段能力存在【之前】留下的保命措施，而它保的方式是【把尾巴直接扔掉】：
+    # 日报写长了，后半截静默消失，收件人只看到一个「...」。
+    # 现在 send_message_safe 会按服务端上限分段发，内容一个字都不丢。
+    # （2026-09-08 灵犀第四轮建议「grep 一遍 Python 侧拿 len() 卡长度的点」，扫出来的）
 
     try:
         ok = send_message_safe(ADMIN_ID, report, token)

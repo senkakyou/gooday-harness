@@ -128,7 +128,12 @@ def gen_episode(topic):
         return None
     out = p.stdout.strip()
     if p.returncode != 0 or not out:
-        log(f"  ! {topic['id']} Claude rc={p.returncode} err={p.stderr.strip()[:120]}")
+        # 【stderr 为空时必须把 stdout 也打出来】。2026-09-08 实测：本产线整轮
+        # 20 集全失败，日志里每条都是 `rc=1 err=` —— 真因一个字都没有，
+        # 因为 claude CLI 的错误常打在 stdout 上。
+        # 「有日志但看不出真因」和没日志一样，事后无法复盘。
+        err = p.stderr.strip()[:200] or f"(stderr 空) stdout={out[:200]!r}"
+        log(f"  ! {topic['id']} Claude rc={p.returncode} err={err}")
         return None
 
     scenes, order, script = {}, [], []
@@ -253,7 +258,10 @@ def build_and_publish(topic, script, scenes, do_render, do_publish):
         args.append("--no-render")
     if do_publish and do_render:
         args.append("--publish")
-    r = subprocess.run(args, cwd="/opt/gooday", capture_output=True, text=True, timeout=3600)
+    # cwd 曾写死 "/opt/gooday" —— 那个目录 2026-09-07 切换时已改名为 /opt/goodayback，
+    # 现在【不存在】，subprocess 会抛 FileNotFoundError 而不是返回错误码。
+    # 用本产线自己的目录（HERE），它跟着仓库走，不会再因为改名而失效。
+    r = subprocess.run(args, cwd=HERE, capture_output=True, text=True, timeout=3600)
     ok = "成片" in r.stdout or "--no-render" in " ".join(args)
     for l in r.stdout.strip().split("\n")[-4:]:
         if l.strip():

@@ -18,7 +18,18 @@ msg=("📤【成语时光机·新集上传清单】共"+str(len(rows))+"集，�
      +"\n".join(lines)
      +"\n上传三项：①专辑=成语时光机(非English) ②是否AI合成=是 ③标题照上面。")
 ts=time.strftime("%Y-%m-%d %H:%M:%S")+".0000000"
-msg_sql=msg.replace("'","''")
-db(f"INSERT INTO PrivateMessages (SenderId,SenderUsername,ReceiverId,ReceiverUsername,Content,CreatedAt,IsRead) VALUES (20,'灵犀',1,'admin','{msg_sql}','{ts}',0);")
+
+# 【清单要分段】。这条绕开 API 直接写库，服务端那道 4000 的判定碰不到，
+# 所以不会被拒 —— 但攒下的集数一多，就会写出一条几万字的消息：
+# 前端得渲染它、任何转发它的地方会被 400 挡掉。一次 PUSHED 复位就能造出 600 行。
+# 上限与切法复用 packages/botkit/outbound，不在这里写第二份数字（G03 / G21）。
+import sys
+sys.path.insert(0,"/opt/gooday-harness/packages/botkit")
+from outbound import MAX_CONTENT, split
+segs = split(msg) if len(msg) > MAX_CONTENT else [msg]
+if len(segs) > 1: print(f"清单 {len(msg)} 字超过上限 {MAX_CONTENT}，分 {len(segs)} 段")
+for seg in segs:
+    seg_sql=seg.replace("'","''")
+    db(f"INSERT INTO PrivateMessages (SenderId,SenderUsername,ReceiverId,ReceiverUsername,Content,CreatedAt,IsRead) VALUES (20,'灵犀',1,'admin','{seg_sql}','{ts}',0);")
 open(PUSHED,"w").write(maxno)
 print(f"已推 {len(rows)} 集清单(至第{maxno}集)")
