@@ -45,7 +45,7 @@ def check(ctx):
     # shell：注释 ＋ echo/printf 的提示语都不算「脚本真的在做的事」。
     # 但别的字符串要留着——`for dir in "$REPO/services"/*/` 是合法写法，
     # 无差别剥引号会把它判成「没有扫描 services/」（2026-09-08 灵犀实测的假红）。
-    src = code_only(ctx.read(INSTALL), strip_echo=True)
+    src = code_only(ctx.read(INSTALL), strip_echo=True, strip_heredoc=True)
 
     for point, pats in MUST_GLOB.items():
         if not ctx.exists(point):
@@ -70,8 +70,22 @@ def check(ctx):
         yield ("WARN", f"{INSTALL} 没有 set -e",
                "中途失败会继续跑下去，装出半套配置——比装失败更难发现")
 
-    # 仓库外的四个位置必须由安装脚本创建，否则首次部署时服务无处写状态/日志
+    # 仓库外的四个位置必须由安装脚本【创建】，否则首次部署时服务无处写状态/日志。
+    #
+    # 【判据要求同一行上有建目录的命令，不是裸子串命中】。
+    # 2026-09-08 灵犀第三轮：原来写的是 `if d not in src`，
+    # 于是脚本末尾那段 `cat <<'EOF' … EOF` 收尾提示里的
+    # `/var/lib/gooday-harness/state` 就能满足它 ——
+    # 把真正的 `install -d` 整行删掉，规则照样绿。
+    # heredoc 已由 code_only(strip_heredoc=True) 剥掉，这条同行判据是第二道。
+    # 先把反斜杠续行接起来 —— install.sh 真实写法就是一条 install -d 跨两行：
+    #     install -d -m 755 /var/lib/gooday-harness/{...} \
+    #                       /var/log/gooday-harness /srv/gooday-harness/media
+    # 不接的话「同一行」这个判据会把后半行判成没人建，那是自己造的假红。
+    joined = re.sub(r"\\\n\s*", " ", src)
     for d in ("/var/lib/gooday", "/var/log/gooday", "/srv/gooday"):
-        if d not in src:
+        if not re.search(r"(install\s+-d|mkdir\s+-p)[^\n]*" + re.escape(d), joined):
             yield ("WARN", f"{INSTALL} 没有创建 {d}",
-                   "G01 规定状态/日志/产物在仓库外，但没人建目录，首次部署会失败")
+                   "G01 规定状态/日志/产物在仓库外，但没人建目录，首次部署会失败。"
+                   "判据是同一行上要有 install -d / mkdir -p —— "
+                   "光在提示文本里提到这个路径不算数")

@@ -40,11 +40,59 @@ import re
 # 处理它们要真做词法分析，而【做一半的词法分析比不做更危险】：
 # 它会在某些写法上悄悄剥错东西，制造出比原问题更难查的假阴性。
 _STR = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
-# 行内从 echo / printf 开始的部分（命令名之后就是它的参数）
-_ECHO = re.compile(r"\b(echo|printf)\b")
+# 行内从输出命令开始的部分（命令名之后就是它的参数）。
+# `log` 是本仓库 install.sh 的输出函数（`log() { printf '==> %s\n' "$*"; }`），
+# 它才是这个脚本主要的说话方式 —— 只认 echo/printf 会漏掉大半提示语。
+# `\b` 保证 `log_files` 这种不会被误当成 log。
+_ECHO = re.compile(r"\b(echo|printf|log)\b")
+# heredoc 开头：<<EOF / <<'EOF' / <<-"EOF"。
+# 【必须排除 `<<<`（here-string）】，也【必须只认引号外的 `<<`】——
+# 第一版两条都没做，于是 install.sh 里这一行被当成了 heredoc 开头：
+#     END_MARK="# <<< gooday-harness managed block <<<"
+# 它是个字符串常量。结果从那行起整个文件后半段被当作 heredoc 正文丢掉，
+# G04 当场报「没有扫描 workflows/」「没有扫描 ops/nginx/」两条假红。
+# 摔的正是本文件自己写着的那句：**做一半的词法分析比不做更危险。**
+# 好在方向是安全的一侧：症状是假红（看得见），不是假绿（看不见）。
+_HEREDOC = re.compile(r"<<-?(?!<)\s*[\"']?(\w+)[\"']?")
 
 
-def code_only(src, strip_echo=False):
+def _spans(line):
+    """行内被引号包住的区间。用来判断某个位置是不是在字符串里。"""
+    return [(m.start(), m.end()) for m in _STR.finditer(line)]
+
+
+def _heredoc_marker(line):
+    """这一行是不是 heredoc 开头；是就返回结束标记，否则 None。"""
+    quoted = _spans(line)
+    for m in _HEREDOC.finditer(line):
+        if any(a <= m.start() < b for a, b in quoted):
+            continue                      # `<<` 落在字符串里，不是重定向
+        return m.group(1)
+    return None
+
+
+def _strip_heredocs(lines):
+    """把 heredoc 正文整段丢掉，只留结束标记行之外的代码。
+
+    2026-09-08 灵犀第三轮：同一个形状第三次换皮 —— 注释 → echo → **heredoc**。
+    install.sh 末尾那段 `cat <<'EOF' … EOF` 收尾提示里写着
+    `/var/lib/gooday-harness/state`，于是「安装脚本有没有创建这些目录」
+    被一段【打给人看的提示文本】满足了：把真正的 `install -d` 整行删掉，规则照样绿。
+
+    heredoc 正文按定义就是数据不是命令，剥掉是安全的方向：
+    万一剥错，症状是假红（看得见），不是假绿（看不见）。
+    """
+    out, end = [], None
+    for ln in lines:
+        if end is None:
+            out.append(ln)
+            end = _heredoc_marker(ln)
+        elif ln.strip() == end:
+            end = None
+    return out
+
+
+def code_only(src, strip_echo=False, strip_heredoc=False):
     """去掉整行注释后的源码。
 
     只剥【整行】注释，不碰行尾 `#`——行尾的 `#` 可能落在字符串里，
@@ -55,16 +103,19 @@ def code_only(src, strip_echo=False):
     一句 `echo "改要改 workflows/*/deploy/schedule.cron"` 不该满足
     「install.sh 有没有扫描 workflows/」。
     """
-    lines = []
-    for ln in src.splitlines():
+    lines = src.splitlines()
+    if strip_heredoc:
+        lines = _strip_heredocs(lines)
+    out = []
+    for ln in lines:
         s = ln.lstrip()
         if s.startswith("#") or s.startswith("//"):
             continue
         if strip_echo:
             m = _ECHO.search(ln)
             if m:
-                # 只对 echo/printf 之后的部分动手，前半行原样保留：
+                # 只对输出命令【之后】的部分动手，前半行原样保留：
                 # `foo services/*/ && echo "..."` 里前半截是真的在扫描。
                 ln = ln[:m.end()] + _STR.sub(" ", ln[m.end():])
-        lines.append(ln)
-    return "\n".join(lines)
+        out.append(ln)
+    return "\n".join(out)

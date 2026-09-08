@@ -101,6 +101,69 @@ def check(ctx):
                "复用 packages/botkit/outbound 的 MAX_CONTENT 与 split()，"
                "别在这里复制第二份数字")
 
+    # 前端输入框也在作用域里 —— 上一版只扫 .py，作用域窄在【语言维度】上
+    # （2026-09-08 灵犀第三轮指出）。
+    for item in check_frontend(ctx, server_limit):
+        yield item
+
+
+HUB = "services/api/src/Hubs/ChatHub.cs"
+WEB = "services/web/src"
+MAXLEN_PAT = re.compile(r"maxLength=\{(\d+)\}")
+
+
+def check_frontend(ctx, rest_limit):
+    """前端输入框的 maxLength 也要对齐它【真正说话的那个端点】。
+
+    2026-09-08 灵犀第三轮指出前端不在作用域里，属实——但她的结论要改一处：
+    她说「同一个服务端上限现在有 1000/500/4000 三个数」。实测不是：
+
+      · `ChatBox.jsx` 走的是 **SignalR**（`ChatHub.SendMessage`），
+        而 `ChatHub.cs:40` 自己判 `content.Length > 500` ——
+        它的 `maxLength={500}` **是对齐的，不是第三个数**。
+      · 真正没对齐的只有 `Messages.jsx`：私信走 REST，服务端 4000，它写 1000。
+
+    所以判据必须按【端点】分，不能按「有几个数字」分。
+    识别方式是文件里 import 了谁：`api/messages` → REST；`signalr` → Hub。
+    """
+    import os
+    root = ctx.path(WEB)
+    if not os.path.isdir(root):
+        return
+    hub_limit = None
+    if ctx.exists(HUB):
+        m = SERVER_PAT.search(ctx.read(HUB))
+        if m:
+            hub_limit = int(m.group(1))
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [x for x in dirnames if x != "node_modules"]
+        for fn in filenames:
+            if not fn.endswith((".jsx", ".js")):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, fn), ctx.path("."))
+            src = ctx.read(rel)
+            # 只看「消息输入框」那一类：maxLength 小于 100 的是昵称、验证码之类
+            limits = [int(x) for x in MAXLEN_PAT.findall(src) if int(x) >= 100]
+            if not limits:
+                continue
+            if "api/messages" in src:
+                who, cap = "私信 REST 接口", rest_limit
+            elif "signalr" in src.lower():
+                if hub_limit is None:
+                    continue
+                who, cap = "ChatHub", hub_limit
+            else:
+                continue
+            for n in limits:
+                if n > cap:
+                    yield ("ERROR", f"{rel} 的 maxLength={n} 超过{who}上限 {cap}",
+                           "前端放行、服务端拒收 —— 用户打完了才发现发不出去")
+                elif n < cap:
+                    yield ("WARN", f"{rel} 的 maxLength={n} 严于{who}上限 {cap}",
+                           "不丢消息，但用户打到上限就静默打不动：没提示、没字数计数。"
+                           "要么对齐，要么给个可见的计数器")
+
 
 def _py_files(ctx):
     import os

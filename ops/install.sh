@@ -189,8 +189,13 @@ if [[ -f "$REPO/.env" ]]; then
     echo "    ops/docker/.env → $REPO/.env"
     # 验证插值真的成立，不只是软链建成了（延续「验证生效不验证写入」）
     if command -v docker >/dev/null 2>&1; then
+        # 【要去掉引号再判空】。compose config 把空值渲染成 `""` ——
+        # 那是两个非空字符，直接判 -z 会当成「有值」放行，
+        # 于是「密钥没传进去」这件事被判成 ✅（2026-09-08 灵犀第三轮指出）。
         miss="$(cd "$REPO/ops/docker" && docker compose config 2>/dev/null \
                 | grep -oP '(?<=Jwt__Secret: )\S*' || true)"
+        miss="${miss//\"/}"
+        miss="${miss//\'/}"
         if [[ -z "$miss" ]]; then
             # 【这条比 nginx 语法错重得多】：密钥空展开 = 容器 running、日志没红、
             # 每个请求 500，整站挂掉（2026-09-07 真事故，见上面那段注释）。

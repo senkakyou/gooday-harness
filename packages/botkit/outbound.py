@@ -31,6 +31,23 @@ RETRY_GAP = 2
 # 这个数必须和服务端一致；不一致时长回复会被整条丢掉（2026-09-08 真丢过一份评审）。
 MAX_CONTENT = 4000
 
+
+def ulen(s):
+    """按 **UTF-16 码元**数长度 —— 服务端 `string.Length` 数的就是这个。
+
+    Python 的 `len()` 数的是码点，两者对 BMP 外字符（emoji、部分生僻字）差一倍：
+    `len("🔴") == 1`，而 C# 里 `"🔴".Length == 2`。
+
+    第一版拿 `len()` 当上限判据，还在文档里写「靠分段前缀预留的 16 字余量兜着」。
+    **那个推理是错的**（2026-09-08 灵犀第三轮指出）：误差不是有上界的常数，
+    是跟段内 astral 字符**线性相关**——一段里 17 个 🔴 就破。
+    而日报的优先级标恰好在用 🔴🟠⚪🔵，**全是 astral**。
+
+    更阴的是破的时候的样子：`send` 里那句「内容 N 字超过上限」用同一个 `len()` 判，
+    恰好判为假 → 不分段、不打印、直接吃 400。**真因又一次不进日志。**
+    """
+    return len(s.encode("utf-16-le")) // 2
+
 # 角色 -> 允许发给谁。"*" = 任意（只该给唯一对外窗口）
 # 这张表是【结构性防线】：即使 bot 被注入说服了，它也发不出去。
 OUTBOUND_WHITELIST = {}
@@ -73,9 +90,9 @@ def send(sender_id, receiver_id, content, *, token_provider, tag="bot",
         print(f"[{tag}] ⛔ 出口白名单拦截：{sender_id} → {receiver_id}", flush=True)
         return False, "出口白名单不允许"
 
-    if not _presplit and len(content) > MAX_CONTENT:
+    if not _presplit and ulen(content) > MAX_CONTENT:
         segs = split(content)
-        print(f"[{tag}] 内容 {len(content)} 字超过上限 {MAX_CONTENT}，"
+        print(f"[{tag}] 内容 {ulen(content)} 码元超过上限 {MAX_CONTENT}，"
               f"自动分 {len(segs)} 段发送", flush=True)
         ok = send_segments(sender_id, receiver_id, segs,
                            token_provider=token_provider, tag=tag, retries=retries)
@@ -113,8 +130,8 @@ def send(sender_id, receiver_id, content, *, token_provider, tag="bot",
                     pass
                 print(f"[{tag}] ⛔ 发送 HTTP {e.code}，请求本身有问题，不重试：{body}",
                       flush=True)
-                if len(content) > MAX_CONTENT:
-                    print(f"[{tag}]    内容 {len(content)} 字，超过上限 "
+                if ulen(content) > MAX_CONTENT:
+                    print(f"[{tag}]    内容 {ulen(content)} 码元（{len(content)} 字），超过上限 "
                           f"{MAX_CONTENT} —— 该走 split()/send_segments()", flush=True)
                 return False, f"HTTP {e.code}: {body}"
             else:
@@ -139,20 +156,25 @@ def split(content, limit=MAX_CONTENT):
     `send_segments` 当时就存在，但【没有任何人调用它】：
     runner 直接把整段回复塞给 send。又一个「能力写好了但没接上」。
     """
-    if len(content) <= limit:
+    if ulen(content) <= limit:
         return [content]
     # 留出「（i/n）\n」前缀的位置。不留就会切出恰好等于上限的段，
     # 加上前缀后又超一点点 —— 那种差几个字符的 400 最难查。
     limit -= 16
     segs, rest = [], content
-    while len(rest) > limit:
-        window = rest[:limit]
+    while ulen(rest) > limit:
+        # 【按码元定窗口，不按码点】。码元数 ≥ 码点数，所以 limit 是安全上界，
+        # 再往回收到真正放得下为止 —— 一段里全是 emoji 时窗口会收掉将近一半。
+        i = min(len(rest), limit)
+        while i > 1 and ulen(rest[:i]) > limit:
+            i -= max(1, (ulen(rest[:i]) - limit) // 2)
+        window = rest[:i]
         # 找最靠后的安全切点：空行 > 换行 > 硬切
         cut = window.rfind("\n\n")
-        if cut < limit // 2:
+        if cut < i // 2:
             cut = window.rfind("\n")
-        if cut < limit // 2:
-            cut = limit
+        if cut < i // 2:
+            cut = i
         segs.append(rest[:cut].rstrip())
         rest = rest[cut:].lstrip("\n")
     if rest:
@@ -175,23 +197,33 @@ def send_each(content, send_one, tag="bot"):
 
     「借了 split() 没借 send_segments()」还是半个能力。这个函数就是那另一半。
     """
-    segs = split(content) if len(content) > MAX_CONTENT else [content]
+    segs = split(content) if ulen(content) > MAX_CONTENT else [content]
     if len(segs) > 1:
-        print(f"[{tag}] 内容 {len(content)} 字超过上限 {MAX_CONTENT}，"
+        print(f"[{tag}] 内容 {ulen(content)} 码元超过上限 {MAX_CONTENT}，"
               f"分 {len(segs)} 段发送", flush=True)
+    return run_segments(segs, send_one, tag=tag)
+
+
+def run_segments(segments, send_one, tag="bot"):
+    """逐段发 ＋ 失败补报。**补报文案只有这一处**。
+
+    2026-09-08 灵犀第三轮指出：`send_each` 和 `send_segments` 各写了一遍补报，
+    措辞还不一样（「内容不完整」vs「内容可能不完整」）——
+    我刚引用完 G03 单一真源，转手就造了第二份。现在两边都走这里。
+    """
     failed = []
-    for i, seg in enumerate(segs, 1):
+    for i, seg in enumerate(segments, 1):
         try:
             ok = bool(send_one(seg))
         except Exception as e:
-            print(f"[{tag}] 第 {i}/{len(segs)} 段异常：{e}", flush=True)
+            print(f"[{tag}] 第 {i}/{len(segments)} 段异常：{e}", flush=True)
             ok = False
         if not ok:
             failed.append(i)
     if failed:
         # 【补报也要发出去】。不发的话收件人看到的是一段完整的话，
         # 完全不知道后面还有——比明说「缺了几段」危险得多。
-        note = (f"⚠️ 第 {'、'.join(map(str, failed))}/{len(segs)} 段发送失败，"
+        note = (f"⚠️ 第 {'、'.join(map(str, failed))}/{len(segments)} 段发送失败，"
                 f"内容不完整")
         print(f"[{tag}] {note}", flush=True)
         try:
@@ -205,14 +237,10 @@ def send_segments(sender_id, receiver_id, segments, **kw):
     """分段发送。单段失败【不 break】，继续发后续段并在最后说明。
 
     段已经切好了（由 send 内部或调用方切），所以这里不再切一次。
+    循环与补报都走 run_segments —— 补报文案只该有一处（G03）。
     """
-    failed = []
-    for i, seg in enumerate(segments, 1):
-        ok, _ = send(sender_id, receiver_id, seg, _presplit=True, **kw)
-        if not ok:
-            failed.append(i)
-    if failed:
-        send(sender_id, receiver_id,
-             f"⚠️ 第 {'、'.join(map(str, failed))}/{len(segments)} 段发送失败，"
-             f"内容可能不完整", _presplit=True, **kw)
-    return not failed
+    tag = kw.get("tag", "bot")
+    return run_segments(
+        segments,
+        lambda seg: send(sender_id, receiver_id, seg, _presplit=True, **kw)[0],
+        tag=tag)
