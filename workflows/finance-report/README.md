@@ -3,6 +3,7 @@
 每月 1 号 09:30 出上月财务汇总。
 
 ## 判据
+
 ```bash
 python3 workflows/finance-report/run.py
 ```

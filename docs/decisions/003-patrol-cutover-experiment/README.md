@@ -1,9 +1,10 @@
+# experiments/patrol-cutover · patrol 影子 → 生产
+
 > **状态：已结案（2026-09-07 迁移收尾）。**
 > 实验的归宿是决策记录，所以从 `evolution/experiments/` 挪到这里 ——
 > 那是扩展点，留着已完成的实验会让新人照着抄一个不再成立的判据。
 > 结论与后续处置见同目录的 `003-patrol-cutover.md`。
 
-# experiments/patrol-cutover · patrol 影子 → 生产
 
 ## 要验证的改动
 

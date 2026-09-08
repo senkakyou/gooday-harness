@@ -10,6 +10,7 @@
 旧端口在切换后已经不通，这条不改就会每个工作日静默失败。
 
 ## 判据
+
 ```bash
 bash workflows/invest-warmup/run.sh
 tail -1 /var/log/gooday-harness/invest-warmup-detail.log   # 应为 OK http=200 ... items=140

@@ -4,6 +4,7 @@
 每天 02:00 出 20 集（选题池取完自动停）。
 
 ## 构成（整条产线一起迁，不是只搬入口）
+
 | 文件 | 职责 |
 |------|------|
 | `run.py` | 调度：挑下一集、去重、交给 build |
@@ -13,11 +14,13 @@
 | `math-build.py` | 出片：渲染 + 配音 + 上传 |
 
 ## 判据
+
 ```bash
 python3 workflows/math-episodes/run.py 1 --no-publish   # 出 1 集不发布
 ```
 
 ## 迁移时改的路径
+
 - 集 spec：`scripts/data/math-specs` → `/var/lib/gooday-harness/state/math-episodes/specs`
   （产物不进版本库，G01）
 - 上传目录：`src/GoodayTools/wwwroot/uploads` → `/srv/gooday-harness/media/uploads`

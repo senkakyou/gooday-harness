@@ -3,6 +3,7 @@
 轮询库里的新需求工单，交给 Claude 判断并推进。没有新需求时输出「暂无新需求」。
 
 ## 判据
+
 ```bash
 python3 workflows/dev-requests/run.py     # 退出码 0；无新需求时也算成功
 ```

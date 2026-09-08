@@ -23,12 +23,14 @@
 删掉的话，日后想查「这项以前怎么做的」就没有出处了。
 
 ## 判据
+
 ```bash
 DRY_RUN=1 python3 workflows/coo-patrol/run.py   # 只打印摘要不发消息
 ```
 一切正常时输出「一切正常」；有问题时输出「N 项已处理，M 项需人工」。
 
 ## 迁移时改的
+
 - 服务名：`gooday-lingxi` 等 → `gooday-harness-bot-lingxi` 等（旧单元已不存在，
   不改的话「服务没在跑」会每 5 分钟误报一次）
 - 容器名：`gooday_app` → `gooday-harness-api`

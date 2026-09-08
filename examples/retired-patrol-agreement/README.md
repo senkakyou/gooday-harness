@@ -1,3 +1,5 @@
+# evaluators/patrol-agreement · 新旧 patrol 结论一致性
+
 > **状态：已结案（2026-09-07 迁移收尾）。**
 > 它要回答的问题「新 patrol 能不能从影子切成生产」已经不成立 ——
 > 旧 patrol 随 `/opt/gooday` 一起退役，没有可比对象了。
@@ -11,7 +13,6 @@
 >
 > 它当时的结论与后续处置见 `docs/decisions/003-patrol-cutover.md`。
 
-# evaluators/patrol-agreement · 新旧 patrol 结论一致性
 
 第二层循环的第一个真实评价器。它回答一个**具体的待决问题**：
 新 patrol 能不能从影子切成生产？

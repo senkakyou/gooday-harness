@@ -3,6 +3,7 @@
 每天 09:00 汇总工单/项目/财务，发一份日报。
 
 ## 判据
+
 ```bash
 python3 workflows/daily-report/run.py     # 末行 [lingxi-daily] 日报发送 ✅
 ```
