@@ -189,7 +189,7 @@ else
     echo "    ⚠️ $REPO/.env 不存在，跳过。api 起来后会因缺密钥而每个请求 500"
 fi
 
-# ── 4. ops/nginx/* —— 装进本项目自己的目录，并【验证真的会被读到】 ──────
+# ── 4. ops/nginx/conf.d/* —— 它【就是】容器的挂载源，不需要拷贝 ────────
 #
 # ⚠️ 别想当然往 /etc/nginx/conf.d 写。
 #
@@ -197,13 +197,22 @@ fi
 # nginx 跑在容器里，配置来自 bind mount。往 /etc/nginx/conf.d 写会
 # 「写入成功、脚本显示 OK、实际零效果」——比冲突更难发现，因为没有任何报错。
 #
-# 所以本段的规矩是：**验证生效，不能只验证写入。**
-NGINX_DIR=/opt/gooday-harness/nginx/conf.d
-log "安装 nginx 配置 → $NGINX_DIR"
-install -d -m 755 "$NGINX_DIR"
+# ⚠️ 2026-09-08 发现第二层同款：修完上面那条之后，本段改成拷进
+#    /opt/gooday-harness/nginx/conf.d/ —— 而 ops/docker/docker-compose.yml 挂的是
+#    `../nginx/conf.d`，相对 ops/docker/ 解析出来是 **ops/nginx/conf.d**。
+#    于是拷贝落进一个没人读的目录，紧接着 `docker exec nginx -t && reload` 成功
+#    （容器读的是 ops/nginx，本来就是对的），脚本打印 ✅。
+#    **拷贝零效果，验证却全绿**——正是 G08 存在的理由，被 G08 自己的实现犯了。
+#    更糟的是 glob 写成 ops/nginx/*.conf：它抓的是主配置 nginx.conf、
+#    漏掉 conf.d/gooday.conf。真挂上去 nginx 会因 `events{}` 出现在 http 段而起不来。
+#
+# 现在的规矩：**真源就是挂载源，不拷贝**。本段只做三件事——
+# 冲突预检、确认容器挂的确实是这个目录、语法验证并 reload。
+NGINX_DIR="$REPO/ops/nginx/conf.d"
+log "校验 nginx 配置（真源即挂载源：$NGINX_DIR）"
 
-nginx_files=("$REPO"/ops/nginx/*.conf)
-if [[ ${#nginx_files[@]} -eq 0 ]]; then
+nginx_files=("$REPO"/ops/nginx/conf.d/*.conf)
+if [[ ! -e "${nginx_files[0]}" ]]; then
     echo "    （无配置，跳过）"
 else
     # 4a. 冲突预检：端口与 server_name 是不是已经被别人占了
@@ -233,7 +242,9 @@ else
         while read -r sn; do
             while read -r d; do
                 [[ -d "$d" ]] || continue
-                [[ "$d" == "$NGINX_DIR" ]] && continue      # 本项目自己不算冲突
+                # 本项目自己不算冲突。用 readlink -f 归一：容器记录的挂载源
+                # 可能带符号链接或旧路径名，字符串直比会把自己当成冲突方报出来。
+                [[ "$(readlink -f "$d")" == "$(readlink -f "$NGINX_DIR")" ]] && continue
                 if grep -rqs "server_name.*\b${sn}\b" "$d" 2>/dev/null; then
                     echo "    ⚠️ server_name '$sn' 与 $d 里的配置冲突"
                 fi
@@ -245,22 +256,31 @@ else
     done
 
     for c in "${nginx_files[@]}"; do
-        install -m 644 "$c" "$NGINX_DIR/$(basename "$c")"
         echo "    $(basename "$c")"
     done
 
-    # 4b. 生效验证：有没有【真的】有一个 nginx 在读这个目录
+    # 4b. 生效验证：先证明【容器读的确实是这个目录】，再验语法并 reload。
+    #     只做 `nginx -t && reload` 是不够的 —— 那在配置根本没送到的时候也会成功，
+    #     那正是 2026-09-08 踩的坑。所以第一步查挂载源，不是查语法。
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^gooday-harness-nginx$'; then
-        docker exec gooday-harness-nginx nginx -t \
-            && docker exec gooday-harness-nginx nginx -s reload \
-            && echo "    ✅ 已验证语法并 reload"
+        mount_src="$(docker inspect gooday-harness-nginx \
+            --format '{{range .Mounts}}{{if eq .Destination "/etc/nginx/conf.d"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
+        if [[ "$(readlink -f "$mount_src")" == "$(readlink -f "$NGINX_DIR")" ]]; then
+            echo "    ✅ 容器挂载源 = $NGINX_DIR（本目录即生效目录，无需拷贝）"
+            docker exec gooday-harness-nginx nginx -t \
+                && docker exec gooday-harness-nginx nginx -s reload \
+                && echo "    ✅ 已验证语法并 reload"
+        else
+            echo "    ❌ 容器 /etc/nginx/conf.d 挂的是 '$mount_src'，不是 $NGINX_DIR"
+            echo "       这个目录里改什么都【不会生效】。对齐 ops/docker/docker-compose.yml"
+            echo "       后 docker compose up -d nginx 重建容器（挂载源改不了，只能重建）。"
+        fi
     elif systemctl is-active --quiet nginx 2>/dev/null; then
-        nginx -t && systemctl reload nginx && echo "    ✅ 已验证语法并 reload"
+        echo "    ⚠️ 宿主机 nginx 在跑，但它读的是 /etc/nginx/conf.d，不是本目录。"
+        echo "       本项目的配置由容器挂载生效；宿主机 nginx 与它无关，不动它。"
     else
-        echo "    ⚠️ 配置已写入，但【没有任何 nginx 在读这个目录】——当前不生效。"
-        echo "       这台机器上 nginx 跑在容器里，宿主机没装。"
-        echo "       迁移期这是预期状态：旧系统的 gooday_nginx 仍独占 80/443。"
-        echo "       切换时才把本目录挂进 nginx 容器，见 docs/specs/002-known-gaps.md 缺口三。"
+        echo "    ⚠️ 没有任何 nginx 在跑——配置【当前不生效】。"
+        echo "       拉起来：cd ops/docker && docker compose up -d nginx"
     fi
 fi
 

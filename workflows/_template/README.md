@@ -1,11 +1,11 @@
-# pipelines/&lt;名字&gt; · 一句话说明这条产线出什么
+# workflows/&lt;名字&gt; · 一句话说明这条流程出什么
 
-> **本文件是模板。** 新增产线：
+> **本文件是模板。** 新增流程：
 > ```bash
-> cp -r pipelines/_template pipelines/<名字>
+> cp -r workflows/_template workflows/<名字>
 > ```
-> 改本文件、`run.py`、`deploy/schedule.cron`。
-> **不需要动 `ops/install.sh` 或 crontab**——安装脚本扫 `pipelines/*/deploy/schedule.cron`
+> 改本文件、`run.py`、`deploy/schedule.cron`（把 `{{NAME}}` 换成目录名）。
+> **不需要动 `ops/install.sh` 或 crontab**——安装脚本扫 `workflows/*/deploy/schedule.cron`
 > 汇总成唯一的 crontab（G03 单一真源 + G04 部署可重建）。
 
 ## 产出

@@ -30,7 +30,7 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 | 大文件入库 | **pre-commit** `check-added-large-files` + git-lfs | 一行配置的事 |
 | 代码风格 | ruff / eslint | — |
 
-`checks/` **只写现成工具不可能知道的规则**——状态机语义、心跳约定、
+`evolution/gates/rules/` **只写现成工具不可能知道的规则**——状态机语义、心跳约定、
 本项目的血泪。那才是资产。
 
 > 环境约束：本机 2G 内存。gitleaks + pre-commit 放本地（轻），
@@ -46,7 +46,7 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 
 | 类别 | 位置 | 进 git |
 |---|---|---|
-| 代码 | `services/` `pipelines/` `packages/` `checks/` | ✅ |
+| 代码 | `services/` `workflows/` `packages/` `evolution/gates/rules/` | ✅ |
 | 配置 | 随服务/产线走（`*/deploy/`）+ 全局 `ops/` | ✅ |
 | 规范 | `policies/` `docs/` | ✅ |
 | **状态** | `/var/lib/gooday-harness/state/` | ❌ 可重建 |
@@ -60,7 +60,7 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 
 ### G02 目录即契约 `[可检查]`
 
-`services/` `pipelines/` `packages/` 下每个成员必须有 `README.md`，且含「判据」章节，
+`services/` `workflows/` `packages/` 下每个成员必须有 `README.md`，且含「判据」章节，
 判据必须可证伪。`_template/` 与 `_shared/` 这类下划线开头的不是成员，不查。
 
 | ❌ 不算判据 | ✅ 算判据 |
@@ -79,7 +79,7 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 | 配置 | 归属 |
 |---|---|
 | 服务 unit / drop-in | `services/<名>/deploy/` |
-| 产线 cron 片段 | `pipelines/<名>/deploy/` |
+| 流程 cron 片段 | `workflows/<名>/deploy/` |
 | 全局（nginx 等） | `ops/nginx/` |
 | **对所有服务相同的 drop-in** | `ops/dropins/` |
 
@@ -102,7 +102,7 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 
 ### G04 部署可重建 `[可检查]`
 
-`ops/install.sh` 必须对扩展点做**通配扫描**（`services/*/deploy`、`pipelines/*/deploy`、
+`ops/install.sh` 必须对扩展点做**通配扫描**（`services/*/deploy`、`workflows/*/deploy`、
 `ops/nginx/*`），**永远不列举成员**。它还必须创建仓库外的四个位置（G01）。
 
 与 G06 的分工：**G06 查成员符不符合模板，G04 查安装脚本认不认得新成员。**
@@ -227,15 +227,30 @@ H03「禁止静默吞错」和 C09「异常必给回执」是同一件事的两�
 `ops/nginx/`（对外暴露 HTTP 时）、`.env`（新环境变量）。
 **声称"零改动"是不诚实的**——把例外写明，比让人自己撞上强。
 
-五个扩展点，每个自带 `_template/`：
+**六个**扩展点由 `g06_extension_contract.py` 逐个查，每个自带 `_template/`：
 
 | 扩展点 | 新增方式 | 成员必须有 |
 |---|---|---|
-| `services/` | `cp -r services/_template services/<名>` | `README.md`、`deploy/unit.service` |
-| `pipelines/` | `cp -r pipelines/_template pipelines/<名>` | `README.md`、`deploy/schedule.cron` |
+| `services/` | `cp -r services/_template services/<名>` | `README.md`（＋ `deploy/unit.service` 或 `ops/docker/` 里的 compose 引用） |
+| `workflows/` | `cp -r workflows/_template workflows/<名>` | `README.md`、`deploy/schedule.cron` |
 | `packages/` | `cp -r packages/_template packages/<名>` | `README.md` |
+| `evolution/loops/` | `cp -r evolution/loops/_template evolution/loops/<名>` | `README.md`、`loop_def.py` |
+| `evolution/evaluators/` | `cp -r evolution/evaluators/_template evolution/evaluators/<名>` | `README.md` |
+| `evolution/experiments/` | `cp -r evolution/experiments/_template evolution/experiments/<名>` | `README.md` |
+
+`services/` 有两类成员，判据不同：systemd 服务要 `deploy/unit.service`，
+容器服务由 `ops/docker/docker-compose.yml` 统一编排（`api` / `web` 属后者）。
+只认第一种会把容器服务误判成「缺 unit.service」——迁入应用容器时才暴露的盲区。
+
+另有两处「丢文件即生效」的加法，形状不同（没有模板目录，故不在 G06 表里）：
+
+| | 新增方式 | 必须有 |
+|---|---|---|
 | `policies/{H,C,G}/` | 丢一个 `.md` 进去 | 条目登记进本表 |
 | `evolution/gates/rules/{H,C,G}/` | 丢一个 `.py` 进去 | `RULE` / `TITLE` / `check(ctx)` |
+
+`evolution/gates/` 本身**不是扩展点**——它是一个工具（`check.py` ＋ `rules/`），
+不是成员集合，所以没有 `_template/`。
 
 **部署配置随服务走，不集中放**——`services/<名>/deploy/` 而不是 `ops/systemd/`。
 `ops/install.sh` 只做通配扫描，永远不列举成员。
@@ -322,8 +337,11 @@ H11（事故产出规范）→ C19。理由见 spec 005。
 ## C 层 · AI 数字公司运营
 
 来源 `ai-company-kit`（**它是要给别家用的产品，不是内规**）。
-C01–C12、C18 是 bot / 数字公司业务规范，`services/` 还没有成员，
-接进来只会是一堆永远 SKIP 的规则——等迁到对应模块再接。
+
+已接入三条：C13、C14、C18。**C01–C12 仍未接入，而当初不接的理由已经不成立了**——
+那时写的是「`services/` 还没有成员，接进来只会是一堆永远 SKIP 的规则」，
+现在 `services/` 有 9 个成员、5 个是 bot，它们正是 C 层要管的东西。
+这条债记在 `docs/specs/005-policy-layers.md`，**别再拿旧理由搪塞**。
 
 ### C18 prompt 注入防御 `[可检查]`
 

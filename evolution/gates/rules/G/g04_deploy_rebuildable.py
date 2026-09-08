@@ -22,8 +22,24 @@ INSTALL = "ops/install.sh"
 MUST_GLOB = {
     "services": [r"services/\*", r"services/\$\{?\w+\}?/deploy"],
     "workflows": [r"workflows/\*", r"workflows/\$\{?\w+\}?/deploy"],
-    "ops/nginx": [r"ops/nginx/\*"],
+    # conf.d 变体：nginx 的配置在 ops/nginx/conf.d/ 下，ops/nginx/ 根上放的是
+    # 主配置 nginx.conf——扫 ops/nginx/*.conf 会抓错文件、漏掉真正的站点配置。
+    "ops/nginx": [r"ops/nginx/\*", r"ops/nginx/conf\.d/\*"],
 }
+
+
+def _code_only(src):
+    """去掉整行注释再匹配。
+
+    2026-09-08 踩到：install.sh 的 nginx 段改成不拷贝之后，代码里已经没有
+    `ops/nginx/*` 这个 glob 了，但注释里写了一句「更糟的是 glob 写成
+    ops/nginx/*.conf」——本规则于是【匹配到注释，判定通过】。
+
+    一个能被注释文字满足的检查器是假的，而本项目最痛恨的就是假绿。
+    只剥整行注释，不碰行尾 `#`：那可能落在字符串里，剥了会造出新的假象。
+    """
+    return "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
 
 
 def check(ctx):
@@ -32,7 +48,7 @@ def check(ctx):
                "没有可重复执行的安装入口，机器重建时配置必丢")
         return
 
-    src = ctx.read(INSTALL)
+    src = _code_only(ctx.read(INSTALL))
 
     for point, pats in MUST_GLOB.items():
         if not ctx.exists(point):

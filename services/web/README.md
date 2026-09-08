@@ -23,12 +23,21 @@ services/web/src/  ──npm run build──▶  services/api/src/wwwroot/{index
 
 ## 判据
 
-```bash
-cd services/web && npm ci && npm run build     # 无报错，且 ../api/src/wwwroot/assets 被重写
-```
+必须可证伪，且能机械判定：
 
-改完前端**必须**再用 Playwright 实访相关页面，确认无 JS 报错、页面正常渲染 ——
-`npm run build` 通过只证明能打包，证明不了页面能用。
+1. **`npm ci && npm run build` 退出码 0**，且 `../api/src/wwwroot/assets/` 下
+   至少 1 个文件 mtime 晚于本次构建开始时间——产物没被重写就是没构建成功。
+
+   ```bash
+   cd services/web && npm ci && npm run build
+   ```
+
+2. **构建耗时 ≤180 秒**（本机 2G 内存，超过这个数通常是在换页而不是在编译，
+   继续等只会 OOM）。
+3. **改动页面必须 Playwright 实访 ≥1 次，控制台 JS 报错数 = 0**——
+   `npm run build` 通过只证明能打包，证明不了页面能用。
+4. **提交里若含 `wwwroot/assets/` 产物却不含对应 `src/` 改动，视为不合格**：
+   那就是 2026-09-07 那个「线上能发、克隆下来重建不出前端」的状态又回来了。
 
 ## 门禁盯着它的两条
 

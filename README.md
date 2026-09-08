@@ -5,8 +5,13 @@
 它是 Gooday 数字公司的新架构，同时是一套可以被别人拿走用的工程规范
 ——因为规范的每一条都配了能自动跑的检查器，而不是写在文档里等人自觉。
 
-> **状态：骨架设计阶段。** 结构与规范已定稿，尚未迁入业务代码。
-> 旧 Gooday 仍在生产运行，两者运行期路径完全隔离，互不影响。
+> **状态：已接管生产（2026-09-07 切换）。**
+> 9 个 services（5 个 bot ＋ dispatcher ＋ ocr ＋ api ＋ web）、14 条 workflows、
+> 4 个 packages、2 条进化闭环在跑。旧 Gooday 已封存为 `/opt/goodayback`，不再接流量。
+>
+> 尚未闭合的：`evolution/evaluators/` 与 `evolution/experiments/` 只有模板、
+> **零个真实成员**——第二层循环的 Evaluate/Experiment 两环目前是空跑。
+> 缺口清单见 `docs/specs/002-known-gaps.md`。
 
 ---
 
@@ -47,15 +52,17 @@ Gooday Harness 强制系统跑**两个循环**：
 
 ```bash
 python3 evolution/gates/check.py .        # 看基线
-cat AGENTS.md                             # 105 行，是索引不是手册
+cat AGENTS.md                             # 索引不是手册，上限 150 行
 cat policies/00-index.md                  # 规范总表（契约）
 ```
 
-新增任何东西都是复制模板，不改现有文件：
+新增任何东西都是复制模板，不改现有文件。**六个扩展点**，各自带 `_template/`：
 
 ```bash
 cp -r services/_template              services/<名>
 cp -r workflows/_template             workflows/<名>
+cp -r packages/_template              packages/<名>
+cp -r evolution/loops/_template       evolution/loops/<名>
 cp -r evolution/evaluators/_template  evolution/evaluators/<名>
 cp -r evolution/experiments/_template evolution/experiments/<名>
 sudo bash ops/install.sh                  # 装上——不需要改这个脚本
@@ -66,9 +73,12 @@ sudo bash ops/install.sh                  # 装上——不需要改这个脚本
 | | |
 |---|---|
 | `services/` `workflows/` `packages/` | 第一层：执行 |
-| `evolution/{evaluators,experiments,gates}/` | 第二层：进化 |
+| `evolution/{loops,evaluators,experiments,gates}/` | 第二层：进化 |
 | `policies/{H,C,G}/` | 规范三层：通用 / 数字公司 / 本项目 |
 | `ops/` `docs/` `examples/` `content/` | 部署、文档、示例、创作源 |
+
+`evolution/gates/` 形状与其他三个不同——它是**一个工具**（`check.py` ＋ `rules/{H,C,G}/`），
+不是成员集合，所以没有 `_template/`。
 
 运行期数据全在仓库外：`/var/lib/gooday-harness/`、`/var/log/gooday-harness/`、
 `/srv/gooday-harness/`。**状态、日志、产物、备份一律不进版本库**——

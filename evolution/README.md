@@ -59,26 +59,42 @@ OpenAI/Google/Microsoft 各自带 SDK），而 MCP 已经标准化工具层、A2
 > **挂在任何执行层之上的自我迭代层。**
 > 不自己实现 Runtime，不绑定某个框架。底下是 Claude CLI、LangGraph 还是别的，都行。
 
-## 三个组成部分
+## 四个组成部分
 
-| 目录 | 是什么 | 扩展方式 |
+| 目录 | 是什么 | 扩展方式 | 现有成员 |
+|---|---|---|---|
+| `loops/` | **一条完整闭环**：谁被改进、怎么判好坏、怎么回滚。引擎是 `packages/evolve`，由 `workflows/evolve` 每天 07:30 各转一轮 | `cp -r loops/_template loops/<名>` | `canary`、`gooday-assets` |
+| `evaluators/` | **怎么给结果打分**。一个目录一个评价器 | `cp -r evaluators/_template evaluators/<名>` | **0 个**（只有模板） |
+| `experiments/` | **改动怎么验证才算通过**。一个目录一个实验 | `cp -r experiments/_template experiments/<名>` | **0 个**（只有模板） |
+| `gates/` | **质量门禁**。规范的执行体，`check.py` + `rules/{H,C,G}/` | 丢一个 `.py` 进 `rules/<层>/` | 24 条规则（23 个 `.py` ＋ G05 由 `check.py` 自身实现） |
+
+`gates/` 和另外三个形状不同——它是**一个工具**，不是成员集合，所以没有 `_template/`。
+
+> **别把这张表当成"四环都在转"。** `evaluators/` 与 `experiments/` 至今零成员，
+> 意味着 `workflows/evaluate` 每天 08:00 跑的是**一个空集合**。
+> 闭环里真正在转的是 `loops/` 那两条——它们自带打分与门禁，不经由 `evaluators/`。
+> 这是当前最大的一处「结构在、内容空」，记在 `docs/specs/002-known-gaps.md`。
+
+## 两条真实闭环的分工
+
+| | 证明什么 | 被改进的对象 |
 |---|---|---|
-| `evaluators/` | **怎么给结果打分**。一个目录一个评价器 | `cp -r evaluators/_template evaluators/<名>` |
-| `experiments/` | **改动怎么验证才算通过**。一个目录一个实验 | `cp -r experiments/_template experiments/<名>` |
-| `gates/` | **质量门禁**。规范的执行体，`check.py` + `rules/{H,C,G}/` | 丢一个 `.py` 进 `rules/<层>/` |
+| `loops/canary` | **Harness 这套机器还活着**（自检探针） | `examples/hello-harness` 的解析器 |
+| `loops/gooday-assets` | **Harness 能改进真实系统** | 运行中的 Gooday：真库、真文件、真用户会撞见的 404 |
 
-`gates/` 和另外两个形状不同——它是**一个工具**，不是成员集合，所以没有 `_template/`。
+两个都要在。只有 canary 说明不了业务在改进；只有业务闭环则出事时分不清
+是闭环坏了还是业务坏了。
 
-## 已经存在的雏形（不是从零开始）
+## 循环各环现在由谁承担
 
-Gooday 里这个循环已经有碎片，缺的是串成显式闭环：
+| 循环环节 | 谁在做 | 自动？ |
+|---|---|---|
+| Evaluate | `loops/*/` 自带判据；`patrol` 11 项巡检、`coo-patrol` 业务巡检 | ✅ |
+| Learn | `docs/incidents/` 事故复盘 | ❌ 人写 |
+| Improve | `docs/decisions/` | ⚠️ 闭环内自动，闭环外人写 |
+| Experiment | `loops/` 内置前后对比；`dispatcher` 影子模式已切生产模式，不再跑影子 | ⚠️ |
+| Gate | `gates/check.py`（CI ＋ pre-commit ＋ 服务器巡检，G17） | ✅ |
+| Rollback | 数据库快照（`workflows/db-snapshot`）＋ Checkpoint ＋ systemd 可重启 | ✅ |
 
-| 循环环节 | 现有的东西 |
-|---|---|
-| Evaluate | `patrol` 的 11 项巡检、日报/月报 |
-| Learn | `docs/incidents/` 事故复盘 |
-| Experiment | `dispatcher` 的**影子模式**（只算不做，比对一致率）——这是现成的实验机制 |
-| Gate | `gates/check.py` |
-| Rollback | 数据库快照 + systemd 可重启 |
-
-影子模式尤其值得复用：它已经证明可以在零风险下验证一个新决策逻辑对不对。
+Learn 与 Improve 的自动化**已定不做**，理由见 `docs/specs/006-learn-improve.md`——
+不是忘了，是想清楚后决定由人来跑这两环。

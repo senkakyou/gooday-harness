@@ -9,12 +9,16 @@
 
 | 环 | 谁在做 |
 |---|---|
-| Evaluate | ✅ `evolution/evaluators/` |
+| Evaluate | ⚠️ `evolution/loops/*` 自带判据；`evolution/evaluators/` 有框架但**零成员** |
 | **Learn** | ❌ 人写 `docs/incidents/` |
 | **Improve** | ❌ 人写 `docs/decisions/` |
-| Experiment | ✅ `evolution/experiments/` |
+| Experiment | ⚠️ `evolution/loops/*` 内置前后对比；`evolution/experiments/` 有框架但**零成员** |
 | Gate | ✅ `evolution/gates/` |
 | Promote / Rollback | ✅ `ops/install.sh` ＋ checkpoint |
+
+> 2026-09-08 订正：原表把 Evaluate / Experiment 标成 ✅ 并指向那两个目录，
+> 但它们至今只有 `_template/`。真正在跑这两环的是 `evolution/loops/` 下的闭环。
+> **「目录存在」不等于「里面有东西在跑」**——这正是本项目反复栽的那个形状。
 
 ## 结论：暂不自动化，而且要明说
 

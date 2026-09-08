@@ -10,6 +10,9 @@
 系统分两个循环：**执行**（把事做完）和**进化**（把事做得更好）。
 目录就是按这两个循环组织的。
 
+**2026-09-07 起它就是生产系统**——9 个 services、14 条 workflows 在真跑，
+旧系统封存为 `/opt/goodayback`。改这里的东西会影响真实用户。
+
 ## 目录结构
 
 ```
@@ -22,9 +25,11 @@
                         ▼
 ┌─ 第二层：进化循环 ──────────────────────────────────────────┐
 │ evolution/                                                  │
+│   loops/<名>/       一条完整闭环：README.md · loop_def.py    │
 │   evaluators/<名>/  给结果打分：这次做得怎么样               │
 │   experiments/<名>/ 改动怎么验证（影子 / 灰度 / 前后对比）    │
 │   gates/            质量门禁：check.py + rules/{H,C,G}/      │
+│                     ——它是工具不是成员集合，故无 _template/  │
 └─────────────────────────────────────────────────────────────┘
 
 policies/{H,C,G}/   规范三层：H 通用 · C 数字公司 · G 本项目
@@ -42,7 +47,7 @@ examples/           可分发示例    content/  创作源
 
 ## 新增一个东西
 
-**五个扩展点各自带 `_template/`。复制模板即可，不改部署脚本、不改公共代码。**
+**六个扩展点各自带 `_template/`。复制模板即可，不改部署脚本、不改公共代码。**
 
 > 三处例外（复核实测确认，写在这里免得你以为是 bug）：
 > 加规范要在 `policies/00-index.md` 登记（这是契约本身，故意的）；
@@ -52,9 +57,10 @@ examples/           可分发示例    content/  创作源
 ```bash
 cp -r services/_template            services/<名>       # 加服务
 cp -r workflows/_template           workflows/<名>      # 加流程
+cp -r packages/_template            packages/<名>       # 加共用库
+cp -r evolution/loops/_template       evolution/loops/<名>        # 加进化闭环
 cp -r evolution/evaluators/_template  evolution/evaluators/<名>   # 加评价器
 cp -r evolution/experiments/_template evolution/experiments/<名>  # 加实验
-cp -r packages/_template            packages/<名>       # 加共用库
 # 加规范：policies/<层>/ 丢 .md ＋ evolution/gates/rules/<层>/ 丢 .py，同一提交
 sudo bash ops/install.sh            # 装上——不需要改这个脚本
 ```

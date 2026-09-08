@@ -1,10 +1,10 @@
 # G01 五类分离：状态、日志、产物、构建中间物一律不进版本库。
-# 它们的正式位置在仓库【外】——见 norms/00-index.md 的位置表：
-#   状态 /var/lib/gooday/state/   日志 /var/log/gooday/
-#   产物 /srv/gooday/media/       备份 /srv/gooday/backups/
+# 它们的正式位置在仓库【外】——见 policies/00-index.md 的位置表：
+#   状态 /var/lib/gooday-harness/state/   日志 /var/log/gooday-harness/
+#   产物 /srv/gooday-harness/media/       备份 /srv/gooday-harness/backups/
 #
 # 这个文件只是第二道防线。第一道是「根本别放进来」，
-# 第三道是 checks/rules/g01_lifecycle_separation.py（会查已跟踪的文件）。
+# 第三道是 evolution/gates/rules/G/g01_lifecycle_separation.py（会查已跟踪的文件）。
 
 # ── 构建中间物 ──
 __pycache__/
@@ -62,8 +62,12 @@ obj/
 .idea/
 *.swp
 
-# 巡检目标配置：各机器不同，从 config.example.json 拷
+# 模块配置：各机器不同，由 install.sh 从 config.example.json 播种（G19）。
+# 【两个扩展点都要写】——g19_config_seeded.py 查的是 workflows 与 services 两处，
+# 而这里原来只挡了 workflows。services/*/config.json 于是既没被忽略也没被跟踪，
+# 一次 `git add -A` 就会把 7 份本机配置提进版本库，G19 当场报红。
 workflows/*/config.json
+services/*/config.json
 
 # 应用源码里的运行期产物（G01）：它们进 /srv/gooday-harness/media/
 services/api/src/wwwroot/uploads/
