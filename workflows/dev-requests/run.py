@@ -18,7 +18,24 @@ import os
 
 # 消息长度上限复用 packages/botkit/outbound —— 不在这里写第二份数字（G03 / G21）
 sys.path.insert(0, "/opt/gooday-harness/packages/botkit")
-from outbound import MAX_CONTENT                  # noqa: E402
+from outbound import MAX_CONTENT, ulen, split     # noqa: E402
+
+
+def insert_pm(cur, sender_id, sender_name, receiver_id, receiver_name, content, ts):
+    """写一条私信；超长按服务端上限分段写成多条。
+
+    【一行 INSERT 是一条消息，那就 INSERT 多行】——分段能力不是 API 独有的。
+    长度按 UTF-16 码元数（ulen），不是 Python 码点：服务端 string.Length 数的是码元，
+    emoji 差一倍。用裸 len() 正是本项目 2026-09-08 判定为错误推理的那个东西。
+    """
+    segs = split(content) if ulen(content) > MAX_CONTENT else [content]
+    for seg in segs:
+        cur.execute("""
+            INSERT INTO PrivateMessages
+              (SenderId, SenderUsername, ReceiverId, ReceiverUsername, Content, IsRead, CreatedAt)
+            VALUES (?, ?, ?, ?, ?, 0, ?)
+        """, (sender_id, sender_name, receiver_id, receiver_name, seg, ts))
+    return len(segs)
 
 DB = "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db"
 RUYI_ID = 23
@@ -96,20 +113,14 @@ def call_claude_for_reply(req):
                             text += block["text"]
             except Exception:
                 pass
-        reply = text.strip()
-        # 这条走【直接写库】，不经 API，所以服务端那道 4000 的判定根本不生效，
-        # 也没有分段可用（一行 INSERT 就是一条消息）。所以这里仍然要截断。
-        # 但两处要改（2026-09-08 灵犀第四轮扫出来的）：
-        #   1. 上限跟 packages/botkit/outbound 的 MAX_CONTENT 走，不再手写 990 ——
-        #      990 是哪来的没人说得清，而 UI 和 API 都按 4000；
-        #   2. **截断要说出来**。原来是 `reply[:990]` 悄悄切掉，
-        #      客户看到的是一句没说完的话，而且不知道它没说完。
-        if len(reply) > MAX_CONTENT:
-            keep = MAX_CONTENT - 40
-            print(f"[handle] ⚠️ 回复 {len(reply)} 字超过上限 {MAX_CONTENT}，"
-                  f"截断至 {keep}", flush=True)
-            reply = reply[:keep] + "\n\n（回复过长已截断，如需完整内容请回复我）"
-        return reply
+        # 【不截断，分段】。这里原来写的是 `reply[:990]` 悄悄切掉，
+        # 我第一次改时只把 990 换成 MAX_CONTENT 并加了一句提示，理由写的是
+        # 「走直接写库、没有分段可用（一行 INSERT 就是一条消息）」——
+        # **那个判断是错的**：一行 INSERT 是一条消息，那就 INSERT 多行。
+        # 同一轮里 chengyu-upload 用的正是这个做法，我却在这里得出相反结论，
+        # 而损失恰好落在【付钱客户】那一侧：内部成语清单能分段，客户回复被截断。
+        # —— 2026-09-08 灵犀评审指出
+        return text.strip()
     except Exception as e:
         print(f"[handle] Claude 调用失败: {e}")
         # 降级：返回通用模板
@@ -181,12 +192,12 @@ def main():
                 uname = u['Username']
                 pm_content = call_claude_for_reply(req_dict)
 
-                # 私信
-                cur.execute("""
-                    INSERT INTO PrivateMessages
-                      (SenderId, SenderUsername, ReceiverId, ReceiverUsername, Content, IsRead, CreatedAt)
-                    VALUES (?, ?, ?, ?, ?, 0, ?)
-                """, (RUYI_ID, RUYI_NAME, user_id, uname, pm_content, now_str))
+                # 私信（超长自动分段，见 insert_pm）
+                n_seg = insert_pm(cur, RUYI_ID, RUYI_NAME, user_id, uname,
+                                  pm_content, now_str)
+                if n_seg > 1:
+                    print(f"[handle] 回复 {ulen(pm_content)} 码元超上限，"
+                          f"分 {n_seg} 段发出", flush=True)
 
                 # 系统通知
                 cur.execute("""
@@ -222,11 +233,7 @@ def main():
         lines.append("\n灵犀已自动回复客户，这几条建议您直接介入跟进。")
         summary = "\n".join(lines)
 
-        cur.execute("""
-            INSERT INTO PrivateMessages
-              (SenderId, SenderUsername, ReceiverId, ReceiverUsername, Content, IsRead, CreatedAt)
-            VALUES (?, ?, ?, ?, ?, 0, ?)
-        """, (RUYI_ID, RUYI_NAME, DAHAI_ID, DAHAI_NAME, summary, now_str))
+        insert_pm(cur, RUYI_ID, RUYI_NAME, DAHAI_ID, DAHAI_NAME, summary, now_str)
 
         cur.execute("""
             INSERT INTO Notifications

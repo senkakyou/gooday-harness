@@ -49,6 +49,12 @@ SCAN_DIRS = ("packages", "workflows", "services")
 # 【故意不认「import 了 outbound」这么松的形态】：coo-patrol 就 import 了它，
 # 却只借 allowed() 做白名单，split() 的坑照踩 —— **半个能力不算兜底**。
 # 必须点名用到 split / send_each / MAX_CONTENT 之一才算数。
+# 【单位也要对】：服务端 string.Length 数 UTF-16 码元，Python len() 数码点，
+# emoji 差一倍。凡是拿长度跟 MAX_CONTENT 比的地方都必须用 ulen()。
+# 2026-09-08 第三轮刚判定「用 len() 是错误推理」，第四轮它就在新写的
+# dev-requests 里复活了 —— 所以这条要有检查器，不能靠记得。
+LEN_CMP_PAT = re.compile(r"\blen\([^()]*\)\s*[<>]=?\s*MAX_CONTENT"
+                         r"|MAX_CONTENT\s*[<>]=?\s*\blen\([^()]*\)")
 BORROWS_PAT = re.compile(
     r"\bMAX_CONTENT\b"
     r"|\b(?:outbound|_ob)\.(?:split|send_each|send_segments)\b"
@@ -99,6 +105,13 @@ def check(ctx):
         if not SENDER_PAT.search(src):
             continue
         if BORROWS_PAT.search(src):
+            # 借了上限，还要用对【单位】
+            if LEN_CMP_PAT.search(src):
+                yield ("ERROR",
+                       f"{path} 用裸 len() 跟 MAX_CONTENT 比 —— 单位不对",
+                       "服务端 string.Length 数 UTF-16 码元，len() 数码点，"
+                       "emoji 差一倍：2001 个 🔵 的 len 是 2001，服务端看到 4002。"
+                       "改用 outbound.ulen()")
             continue
         how = ("直接写 PrivateMessages 表" if "INSERT" in src.upper()
                else "直发 /api/messages/")

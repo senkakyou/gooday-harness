@@ -36,7 +36,14 @@ public class ChatHub(AppDbContext db) : Hub
     [Authorize]
     public async Task SendMessage(string content)
     {
-        content = content.Trim();
+        // (content ?? "")：SignalR 从线上反序列化时 content 可能是 null，
+        // 而 <Nullable>enable</Nullable> 只是编译期标注，运行期拦不住。
+        // 原来是先 content.Trim() 再 IsNullOrEmpty —— null 会在 Trim 那行就抛 NRE，
+        // **于是 IsNullOrEmpty 里的 Null 那一半永远到不了，是死代码**。
+        // （形状同 math-episodes 的 SPEC_DIR 双重赋值：前一句让后一句的一半失效。）
+        // 空格那一半没问题：Trim 在判定之前，纯空格会变成空串被抓住。
+        // —— 2026-09-08 灵犀评审指出
+        content = (content ?? "").Trim();
         if (string.IsNullOrEmpty(content) || content.Length > 500) return;
 
         var userId = int.Parse(Context.User!.FindFirst(ClaimTypes.NameIdentifier)!.Value);

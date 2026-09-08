@@ -87,19 +87,24 @@ public class DevRequestController(AppDbContext db, IWebHostEnvironment env) : Co
         db.DevRequests.Add(r);
         await db.SaveChangesAsync();
 
-        // 提交成功后立刻触发灵犀处理（fire-and-forget，不阻塞响应）
-        _ = Task.Run(() => {
-            try {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
-                    FileName = "/usr/bin/python3",
-                    Arguments = "/opt/gooday/scripts/handle-dev-requests.py",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = false,
-                    RedirectStandardError = false
-                });
-            } catch { /* 触发失败不影响提交结果，cron 兜底 */ }
-        });
+        // 【这里原来有一段「提交后立刻触发灵犀处理」的 fire-and-forget，已删除】
+        //
+        // 它调的是 /opt/gooday/scripts/handle-dev-requests.py：
+        //   · 那个路径 2026-09-07 切换时已改名为 /opt/goodayback，宿主上不存在；
+        //   · 更根本的是【本服务跑在容器里】，compose 只挂了数据卷和产物目录，
+        //     容器里从来就没有这个脚本 —— 它自始至终是空转。
+        //
+        // 它的失败形状比「路径写错」更隐蔽：FileName 是 /usr/bin/python3，
+        // **进程启动是成功的**，所以 catch 一个字都不会触发；
+        // 是 python3 自己 rc=2 退出，而 RedirectStandardError=false、
+        // fire-and-forget 没人收退出码。于是「客户提交后即时处理」
+        // **100% 静默失效**，而注释里那句「cron 兜底」正好把它盖住了。
+        //
+        // 现在诚实地只留 cron：workflows/dev-requests 每小时 5/25/45 分各跑一次，
+        // 最坏延迟 20 分钟。要恢复「即时」就得给它一条真通道
+        // （共享卷放触发文件、或给 workflow 开一个内部 HTTP 触发点），
+        // 而不是假装 Process.Start 能跨过容器边界。
+        // —— 2026-09-08 灵犀评审指出，见 docs/specs/002-known-gaps.md
 
         return Ok(new { message = "提交成功", id = r.Id });
     }

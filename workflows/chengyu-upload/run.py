@@ -25,9 +25,9 @@ ts=time.strftime("%Y-%m-%d %H:%M:%S")+".0000000"
 # 上限与切法复用 packages/botkit/outbound，不在这里写第二份数字（G03 / G21）。
 import sys
 sys.path.insert(0,"/opt/gooday-harness/packages/botkit")
-from outbound import MAX_CONTENT, split
-segs = split(msg) if len(msg) > MAX_CONTENT else [msg]
-if len(segs) > 1: print(f"清单 {len(msg)} 字超过上限 {MAX_CONTENT}，分 {len(segs)} 段")
+from outbound import MAX_CONTENT, ulen, split
+segs = split(msg) if ulen(msg) > MAX_CONTENT else [msg]   # 按码元，不按码点
+if len(segs) > 1: print(f"清单 {ulen(msg)} 码元超过上限 {MAX_CONTENT}，分 {len(segs)} 段")
 for seg in segs:
     seg_sql=seg.replace("'","''")
     db(f"INSERT INTO PrivateMessages (SenderId,SenderUsername,ReceiverId,ReceiverUsername,Content,CreatedAt,IsRead) VALUES (20,'灵犀',1,'admin','{seg_sql}','{ts}',0);")
