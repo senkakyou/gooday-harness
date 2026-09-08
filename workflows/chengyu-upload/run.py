@@ -5,7 +5,21 @@
 import os,time,subprocess
 DB="/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db"
 BOOK=13; BASE="https://gooday.ltd"; PUSHED=os.path.expanduser("~/.chengyu_pushed")
-def db(sql): return subprocess.run(["sudo","-n","/usr/bin/sqlite3","-separator","\x1f",DB,sql],capture_output=True,text=True).stdout
+def db(sql):
+    """跑一句 SQL。**失败必须抛，不能返回空串。**
+
+    原来是 `return subprocess.run(...).stdout` —— 只取 stdout，从不看退出码。
+    于是 INSERT 失败（sudo 被拒、库被锁、磁盘满）返回空串，而调用处照样
+    往下走：write(maxno) 推进度、打印「已推 N 集」。
+    PUSHED 是单调前进不可退的，**那批集子从此永远不再推**，
+    而日志里写着成功 —— 「查不了」被当成「没问题」，本项目最痛恨的形态。
+    （2026-09-08 灵犀第六轮指出，与 dev-requests 那条同族。）
+    """
+    r = subprocess.run(["sudo","-n","/usr/bin/sqlite3","-separator","\x1f",DB,sql],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"sqlite3 退出码 {r.returncode}：{r.stderr.strip()[:200]}")
+    return r.stdout
 last=int(open(PUSHED).read().strip()) if os.path.exists(PUSHED) else 8
 rows=[r for r in db(f"SELECT OrderNo,Title,MediaUrl FROM AudiobookChapters WHERE AudiobookId={BOOK} AND OrderNo>{last} ORDER BY OrderNo;").strip().split("\n") if r]
 if not rows: print("无新集，跳过"); raise SystemExit

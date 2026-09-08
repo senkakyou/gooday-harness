@@ -28,6 +28,10 @@ def insert_pm(cur, sender_id, sender_name, receiver_id, receiver_name, content, 
     长度按 UTF-16 码元数（ulen），不是 Python 码点：服务端 string.Length 数的是码元，
     emoji 差一倍。用裸 len() 正是本项目 2026-09-08 判定为错误推理的那个东西。
     """
+    # 【空内容拒绝写库】。第二道防线：上游任何一处漏判，这里都不该把
+    # 一条空白私信落进库 —— 客户收到空消息，而单子上写着「已回复」。
+    if not (content or "").strip():
+        raise ValueError("拒绝写入空私信：content 为空")
     segs = split(content) if ulen(content) > MAX_CONTENT else [content]
     for seg in segs:
         cur.execute("""
@@ -113,6 +117,28 @@ def call_claude_for_reply(req):
                             text += block["text"]
             except Exception:
                 pass
+        # 【进程起得来 ≠ 事情办成】。原来这里只 try/except 包着 subprocess.run，
+        # 而 except 只挡「进程起不来」这一种。claude 非零退出、认证过期、
+        # stream-json 换了格式、输出里没有 assistant 块 —— 全都落到
+        # 「循环没匹配到东西」→ text 保持 ""，然后被当成一条正常回复返回。
+        #
+        # 后果是完整的一条链：空私信写进库 → 日志照打「已发私信给 X」→
+        # 状态推到 talking、打上 [如意已收] → 下轮被 MARKER 过滤，**永不重试**。
+        # 客户收到一条空白消息，单子上写着「已回复」。
+        # 而刚被改对名字的降级模板，在最可能的失败形态下【根本到不了】。
+        #
+        # 和 DevRequestController 那段 Process.Start 是同一个形状
+        # （2026-09-08 灵犀第六轮指出），修法就是让它真的掉进 except。
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"claude 退出码 {result.returncode}；"
+                f"stderr={result.stderr.strip()[:200] or '(空)'}；"
+                f"stdout={result.stdout.strip()[:200] or '(空)'}")
+        if not text.strip():
+            raise RuntimeError(
+                f"claude rc=0 但没解析出任何 assistant 文本 —— "
+                f"可能是输出格式变了。stdout 首 200 字={result.stdout.strip()[:200]!r}")
+
         # 【不截断，分段】。这里原来写的是 `reply[:990]` 悄悄切掉，
         # 我第一次改时只把 990 换成 MAX_CONTENT 并加了一句提示，理由写的是
         # 「走直接写库、没有分段可用（一行 INSERT 就是一条消息）」——
