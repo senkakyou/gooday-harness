@@ -55,17 +55,31 @@ def allowed(sender_id, receiver_id):
 
 
 def send(sender_id, receiver_id, content, *, token_provider, tag="bot",
-         retries=RETRIES):
-    """发一条消息。返回 (ok, err)。
+         retries=RETRIES, _presplit=False):
+    """发一条消息。**超过 MAX_CONTENT 时自动分段**，调用方不需要知道上限。
 
     token_provider(force_refresh: bool) -> str
     401 时用 force_refresh=True 再要一次——TokenVersion 变更后能自愈。
+
+    为什么保证放在这里，而不是"要求调用方记得调 split()"：
+    2026-09-08 丢那份评审时，`send_segments` 就在下面几十行，
+    只是没有任何人调用它。**正确的用法必须是最省事的用法**——
+    要求人记得的结构，就是在等下一次有人忘。
+    `_presplit` 只给 send_segments 用，防止「切完的段再进来又切一次」的递归。
     """
     if not allowed(sender_id, receiver_id):
         # 【拦下来还要喊一声】。静默拦截等于给攻击者一个安静的探测通道，
         # 也让正当的配置错误变得极难排查。
         print(f"[{tag}] ⛔ 出口白名单拦截：{sender_id} → {receiver_id}", flush=True)
         return False, "出口白名单不允许"
+
+    if not _presplit and len(content) > MAX_CONTENT:
+        segs = split(content)
+        print(f"[{tag}] 内容 {len(content)} 字超过上限 {MAX_CONTENT}，"
+              f"自动分 {len(segs)} 段发送", flush=True)
+        ok = send_segments(sender_id, receiver_id, segs,
+                           token_provider=token_provider, tag=tag, retries=retries)
+        return ok, "" if ok else "分段发送有失败段"
 
     data = json.dumps({"content": content}).encode()
     for attempt in range(1, retries + 1):
@@ -151,11 +165,11 @@ def send_segments(sender_id, receiver_id, segments, **kw):
     """分段发送。单段失败【不 break】，继续发后续段并在最后说明。"""
     failed = []
     for i, seg in enumerate(segments, 1):
-        ok, _ = send(sender_id, receiver_id, seg, **kw)
+        ok, _ = send(sender_id, receiver_id, seg, _presplit=True, **kw)
         if not ok:
             failed.append(i)
     if failed:
         send(sender_id, receiver_id,
              f"⚠️ 第 {'、'.join(map(str, failed))}/{len(segments)} 段发送失败，"
-             f"内容可能不完整", **kw)
+             f"内容可能不完整", _presplit=True, **kw)
     return not failed

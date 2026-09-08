@@ -27,6 +27,18 @@ SERVER_PAT = re.compile(r"[Cc]ontent\.Length\s*>\s*(\d+)")
 # 客户端形如：MAX_CONTENT = 4000
 CLIENT_PAT = re.compile(r"^MAX_CONTENT\s*=\s*(\d+)", re.M)
 
+# 谁在往 /api/messages/ POST。这是本规则的【作用域】——
+# 第一版只盯 packages/botkit/outbound.py 一个文件，而实际有四处在直发：
+# daily-report / finance-report / coo-patrol 各自手搓了发送函数，
+# 全都不认识 4000 这个数，产的还都是长文本（日报、财报、巡检报告）。
+# 吃掉那份评审的 bug 在三个地方原样活着，而规则报绿。
+# 【窟窿不在调用图，在作用域】——2026-09-08 灵犀评审指出。
+SENDER_PAT = re.compile(r"/api/messages/")
+SCAN_DIRS = ("packages", "workflows", "services")
+# 认可的兜底方式：自己声明上限，或者复用 botkit 的（import 那两个名字之一）
+BORROWS_PAT = re.compile(r"\bMAX_CONTENT\b|\bfrom outbound import\b|"
+                         r"\boutbound\.split\b|\b_ob\.split\b")
+
 
 def check(ctx):
     if not ctx.exists(SERVER):
@@ -59,3 +71,29 @@ def check(ctx):
                f"限值不一致：服务端 {server_limit}，{CLIENT} 写的是 {client_limit}",
                "客户端比服务端大 = 超长内容仍会被丢；比服务端小 = 白白多切段。"
                "改服务端时必须同步改这里")
+
+    # ── 作用域检查：每一个往 /api/messages/ POST 的文件都要认识这个上限 ──
+    for path in _py_files(ctx):
+        src = ctx.read(path)
+        if not SENDER_PAT.search(src):
+            continue
+        if BORROWS_PAT.search(src):
+            continue
+        yield ("ERROR", f"{path} 直发 /api/messages/ 但不认识 {server_limit} 字上限",
+               f"超过 {server_limit} 字的内容会被服务端判 400 整条丢掉。"
+               "复用 packages/botkit/outbound 的 MAX_CONTENT 与 split()，"
+               "别在这里复制第二份数字")
+
+
+def _py_files(ctx):
+    import os
+    for d in SCAN_DIRS:
+        root = ctx.path(d)
+        if not os.path.isdir(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [x for x in dirnames
+                           if x not in ("node_modules", "__pycache__", "obj", "bin")]
+            for fn in filenames:
+                if fn.endswith(".py"):
+                    yield os.path.relpath(os.path.join(dirpath, fn), ctx.path("."))

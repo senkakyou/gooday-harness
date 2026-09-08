@@ -67,12 +67,53 @@
 
 | 编号 | 内容 | 能自动检查吗 | 检查器 |
 |---|---|---|---|
-| G21 | 客户端 `MAX_CONTENT` 必须与服务端 `content.Length > N` 的 N 相等；4xx 一律不重试（401 除外） | 是 | `evolution/gates/rules/G/g21_limit_alignment.py` |
+| G21 | 客户端 `MAX_CONTENT` 与服务端 `content.Length > N` 对齐；**每个直发 `/api/messages/` 的文件都要认识这个上限**；4xx 一律不重试（401 除外） | 是 | `evolution/gates/rules/G/g21_limit_alignment.py` |
 
-为什么只查限值对齐、不查「有没有调用 split()」：
-后者要做调用图分析，用 grep 做只会误判。
-**限值对齐是能被机械判定的那一半**，另一半靠 `send` 的 4xx 早退兜底——
-真漏了，日志会直接说「内容 N 字，超过上限 4000」。
+为什么不查「有没有调用 split()」：那要做调用图分析，用 grep 做只会误判。
+**能机械判定的是限值对齐与作用域覆盖**，剩下的靠两层兜底——
+`send()` 自己分段（调用方想漏也漏不掉）＋ 4xx 早退时日志直接说
+「内容 N 字，超过上限 4000」。
+
+### 第一版规则漏了：窟窿不在调用图，在作用域
+
+初版 G21 只盯 `packages/botkit/outbound.py` 一个文件，**报绿**。
+而这台机器上有四处直发 `/api/messages/`，另外三处各自手搓了发送函数：
+
+| 文件 | 产什么 | 当时认识 4000 吗 |
+|---|---|---|
+| `workflows/daily-report/run.py` | 日报 | ❌ |
+| `workflows/finance-report/run.py` | 财报 | ❌ |
+| `workflows/coo-patrol/run.py` | 巡检报告 | ❌ |
+
+**全是最容易写长的那类，收件人还都是站长。**
+`coo-patrol` 最讽刺：它 import 了 `outbound` 只借 `allowed()` 做白名单，
+注释里还写着「harness 本来就有这个能力，不该复制第二份（G03）」——
+**结果只借了半个能力，另一半的坑照样踩。**
+
+三处均已改为复用 `outbound` 的 `MAX_CONTENT` / `split()`，G21 作用域已扩到
+`packages/` `workflows/` `services/` 下所有 `.py`。（2026-09-08 灵犀评审指出）
+
+### 顺带修掉的两处检查器假绿
+
+同一轮评审还翻出两个**检查器被自己的文字满足**的例子：
+
+- `g04` 要求 install.sh 有 `ops/nginx/*` 通配扫描——改写后代码里已经没有了，
+  **是注释里那句「原来 glob 写成 ops/nginx/*.conf」在满足它**。
+- `g17` 要求 `.pre-commit-config.yaml` 真的调用 check.py——
+  **把那行注释掉，G17 照样绿**。同一天、隔壁文件、完全同形。
+
+统一收进 `evolution/gates/rules/_srclib.py` 的 `code_only()`：匹配前剥掉整行注释
+与单行字符串字面量。跨行字符串不处理——**做一半的词法分析比不做更危险**。
+
+`g17_gates_wired.py` 的 docstring 第一行还写着「G11 门禁必须被自动触发」，
+而 `RULE = "G17"`：文件里正好记着「2026-09-07 新写的门禁规则误用了已被占用的 G11」——
+**号改了、docstring 忘了改，事故的化石留在原地。** 已一并修正。
+
+### 已知盲点（写下来，不假装没有）
+
+`split()` 数的是 Python 字符，服务端 `content.Length` 是 UTF-16 码元：
+BMP 外的 emoji 客户端算 1、服务端算 2。**G21 比的是数字，不是单位。**
+目前靠分段前缀预留的 16 字余量兜着，够用但不是根治。
 
 ## 6. 验证
 
@@ -82,9 +123,15 @@
       日志打出 `⛔ 发送 HTTP 400，请求本身有问题，不重试：{"message":"消息内容无效"}`
       ＋ `内容 5000 字，超过上限 4000`
 - [x] 动了常驻服务：6 个 bot 全部重启，**进程启动 04:34:23 晚于代码 mtime 04:33:43**
-- [x] **新检查器在修复前的代码上会红**——
+- [x] **新检查器在修复前的代码上会红**——三种坏状态逐个验过：
       删掉 `MAX_CONTENT`（即修复前的真实状态）→ `❌ [G21] 没有声明 MAX_CONTENT`；
       改成 8000（与服务端不一致）→ `❌ [G21] 限值不一致：服务端 4000，写的是 8000`；
-      恢复 → 错误 0
+      **把三个 workflow 恢复成修复前的真实版本**（`git checkout HEAD --`）→
+      `❌ [G21] workflows/{daily-report,finance-report,coo-patrol}/run.py
+      直发 /api/messages/ 但不认识 4000 字上限`，错误 3；恢复 → 错误 0
+- [x] 两个假绿检查器的反证：把 pre-commit 里调 check.py 那行**注释掉** →
+      `⚠️ [G17] pre-commit 未接入检查器`（修复前是绿的）；
+      把 install.sh 的真 glob 换成 `echo "本该扫 ops/nginx/conf.d/*.conf"` →
+      `❌ [G04] 没有扫描 ops/nginx/`（修复前是绿的）
 - [x] `python3 packages/botkit/test_botkit.py` → 18 项全过
 - [x] `python3 evolution/gates/check.py .` → 规则 25 条 · 错误 0 · 警告 31

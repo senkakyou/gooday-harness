@@ -12,6 +12,7 @@
 """
 import os
 import re
+import sys
 
 RULE = "G04"
 TITLE = "部署可重建"
@@ -28,18 +29,8 @@ MUST_GLOB = {
 }
 
 
-def _code_only(src):
-    """去掉整行注释再匹配。
-
-    2026-09-08 踩到：install.sh 的 nginx 段改成不拷贝之后，代码里已经没有
-    `ops/nginx/*` 这个 glob 了，但注释里写了一句「更糟的是 glob 写成
-    ops/nginx/*.conf」——本规则于是【匹配到注释，判定通过】。
-
-    一个能被注释文字满足的检查器是假的，而本项目最痛恨的就是假绿。
-    只剥整行注释，不碰行尾 `#`：那可能落在字符串里，剥了会造出新的假象。
-    """
-    return "\n".join(ln for ln in src.splitlines()
-                     if not ln.lstrip().startswith("#"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _srclib import code_only                                        # noqa: E402
 
 
 def check(ctx):
@@ -48,7 +39,7 @@ def check(ctx):
                "没有可重复执行的安装入口，机器重建时配置必丢")
         return
 
-    src = _code_only(ctx.read(INSTALL))
+    src = code_only(ctx.read(INSTALL))
 
     for point, pats in MUST_GLOB.items():
         if not ctx.exists(point):

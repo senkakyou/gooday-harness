@@ -259,8 +259,23 @@ def send_as(uid, uname, role, receiver_id, content):
         # 【fail-closed】：查不成 = 不发。放行才是危险的那一边。
         log(f"❌ 出口白名单检查失败，按不发处理（不是放行）：{e}")
         return None
-    return api_call("POST", f"/api/messages/{receiver_id}", {"content": content},
-                    uid=uid, uname=uname, role=role)
+    # 【超长必须分段】。服务端判 content.Length > 4000 直接 400，整条丢掉
+    # （2026-09-08 事故，见 docs/incidents/2026-09-08-long-reply-dropped.md）。
+    # 巡检报告正是最容易写长的那类，而这里以前只借了 outbound 的 allowed()、
+    # 没借它的 split() —— **只借了半个能力**，另一半的坑照样踩。
+    # 上限与切法都复用 outbound，不在这里复制第二份数字（G03 / G21）。
+    try:
+        segs = _ob.split(content) if len(content) > _ob.MAX_CONTENT else [content]
+    except Exception as e:
+        log(f"⚠️ 分段失败，按单段发（可能被服务端判 400）：{e}")
+        segs = [content]
+    if len(segs) > 1:
+        log(f"内容 {len(content)} 字超过上限 {_ob.MAX_CONTENT}，分 {len(segs)} 段发送")
+    last = None
+    for s in segs:
+        last = api_call("POST", f"/api/messages/{receiver_id}", {"content": s},
+                        uid=uid, uname=uname, role=role)
+    return last
 
 # ═══ 2026-09-07：coo-patrol 不再自己动手 ═══════════════════════════
 #

@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
-# Gooday 部署安装 —— 机器重建的唯一入口。
+# Gooday 部署安装 —— systemd 单元、crontab、drop-in、nginx 配置的安装入口。
 #
 #   sudo bash ops/install.sh
 #
 # 幂等，可重复执行。
+#
+# ⚠️ 【它不是"机器重建的唯一入口"】——曾经这么写过，是说过头了（2026-09-08 复核）。
+#    它【不】做这三件事，干净机器上必须另外手工做：
+#      1. 拉起容器：cd ops/docker && docker compose up -d
+#      2. 放证书：ops/nginx/certs/*.pem 在 .gitignore 里，克隆下来是空的，
+#         nginx 找不到证书起不来
+#      3. 建 .env：只有 .env.example 进版本库（G18）
+#    完整重建步骤见 ops/runbooks/。**把差距写明，比让人以为跑完这个就完事强。**
 #
 # ══ G04 铁律 ═══════════════════════════════════════════════════════════
 # 本脚本【只做通配扫描，绝不列举成员】。
@@ -20,6 +28,11 @@ set -euo pipefail
 shopt -s nullglob
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# 装到一半发现「装了但不生效」时，不能一路 echo 完还 exit 0 ——
+# 那是把「检测到错误」降级成「黄绿」，假绿并没有被消除。
+# 置位后继续把能装的装完，最后整体判死（见脚本末尾）。
+INSTALL_FAILED=0
 
 # ── 0. 先确认装的是不是最新代码 ────────────────────────────────────────
 # 2026-09-07 真栽过：在开发副本提交推送后忘了同步部署副本，
@@ -263,24 +276,41 @@ else
     #     只做 `nginx -t && reload` 是不够的 —— 那在配置根本没送到的时候也会成功，
     #     那正是 2026-09-08 踩的坑。所以第一步查挂载源，不是查语法。
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^gooday-harness-nginx$'; then
+        # 只取 Destination 恰好是 /etc/nginx/conf.d 的挂载。
+        # 边界：如果哪天改成【单文件挂载】（-v .../gooday.conf:/etc/nginx/conf.d/gooday.conf），
+        # Destination 对不上，mount_src 会是空 → 落进下面的 ❌ 分支。
+        # 那是误报，但方向是安全的：宁可报「可能没生效」，不可报假的 ✅。
         mount_src="$(docker inspect gooday-harness-nginx \
             --format '{{range .Mounts}}{{if eq .Destination "/etc/nginx/conf.d"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
-        if [[ "$(readlink -f "$mount_src")" == "$(readlink -f "$NGINX_DIR")" ]]; then
+        if [[ -n "$mount_src" \
+              && "$(readlink -f "$mount_src")" == "$(readlink -f "$NGINX_DIR")" ]]; then
             echo "    ✅ 容器挂载源 = $NGINX_DIR（本目录即生效目录，无需拷贝）"
-            docker exec gooday-harness-nginx nginx -t \
-                && docker exec gooday-harness-nginx nginx -s reload \
-                && echo "    ✅ 已验证语法并 reload"
+            # 【不能让 nginx -t 失败直接掐死脚本】。set -e 下 `A && B && C`
+            # 整体失败会当场退出，而本段在第 5 段（装 systemd + 重启服务）【之前】——
+            # 一个 gooday.conf 语法错，代价会是 9 个服务全都没装没重启，
+            # 输出里只有 nginx 的 stderr。所以这里显式吞掉退出码、记下失败，
+            # 到脚本最后再整体判死。（2026-09-08 灵犀评审指出）
+            if docker exec gooday-harness-nginx nginx -t 2>&1 \
+               && docker exec gooday-harness-nginx nginx -s reload 2>&1; then
+                echo "    ✅ 已验证语法并 reload"
+            else
+                echo "    ❌ nginx -t / reload 失败——配置有语法错，当前跑的还是旧配置"
+                INSTALL_FAILED=1
+            fi
         else
-            echo "    ❌ 容器 /etc/nginx/conf.d 挂的是 '$mount_src'，不是 $NGINX_DIR"
+            echo "    ❌ 容器 /etc/nginx/conf.d 挂的是 '${mount_src:-（取不到）}'，不是 $NGINX_DIR"
             echo "       这个目录里改什么都【不会生效】。对齐 ops/docker/docker-compose.yml"
             echo "       后 docker compose up -d nginx 重建容器（挂载源改不了，只能重建）。"
+            INSTALL_FAILED=1
         fi
     elif systemctl is-active --quiet nginx 2>/dev/null; then
-        echo "    ⚠️ 宿主机 nginx 在跑，但它读的是 /etc/nginx/conf.d，不是本目录。"
-        echo "       本项目的配置由容器挂载生效；宿主机 nginx 与它无关，不动它。"
+        echo "    ❌ 宿主机 nginx 在跑，但它读的是 /etc/nginx/conf.d，不是本目录。"
+        echo "       本项目的配置由容器挂载生效——现在没有任何东西在读它，【不生效】。"
+        INSTALL_FAILED=1
     else
-        echo "    ⚠️ 没有任何 nginx 在跑——配置【当前不生效】。"
+        echo "    ❌ 没有任何 nginx 在跑——配置【当前不生效】。"
         echo "       拉起来：cd ops/docker && docker compose up -d nginx"
+        INSTALL_FAILED=1
     fi
 fi
 
@@ -312,3 +342,13 @@ cat <<'EOF'
   ⚠️ 大模型凭据是全线单点：所有 bot 共用同一份。
      它失效时表现为「活着但答不出话」，心跳和 systemd 全绿，不会有告警。
 EOF
+
+# ── 7. 整体判死 ────────────────────────────────────────────────────────
+# 「检测到了但仍然 exit 0」和「没检测」对调用方（CI、人、上层脚本）是同一回事。
+# 前面每一处「装了但不生效」都置了 INSTALL_FAILED，在这里统一以非零退出。
+if (( INSTALL_FAILED )); then
+    echo
+    echo "❌ 安装完成，但上面有【装了却不生效】的项——退出码 1。"
+    echo "   逐条修掉再跑一次；别把它当成'基本成功'。"
+    exit 1
+fi

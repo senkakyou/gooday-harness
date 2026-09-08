@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""G11 门禁必须被自动触发。
+"""G17 门禁必须被自动触发。
 
 **规范 + 检查器 + 没人自动跑它 = 等于没有。**
 
@@ -16,6 +16,10 @@
 """
 import os
 import re
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _srclib import code_only                                        # noqa: E402
 
 RULE = "G17"
 TITLE = "门禁必须被自动触发"
@@ -31,7 +35,7 @@ def check(ctx):
     ci_ok = False
     if os.path.isdir(wf_dir):
         for fn in os.listdir(wf_dir):
-            if fn.endswith((".yml", ".yaml")) and CHECKER in ctx.read(os.path.join(wf_dir, fn)):
+            if fn.endswith((".yml", ".yaml")) and CHECKER in code_only(ctx.read(os.path.join(wf_dir, fn))):
                 ci_ok = True
                 triggers.append(f"CI({fn})")
                 break
@@ -40,7 +44,7 @@ def check(ctx):
                f".github/workflows/ 下加一个跑 `python3 {CHECKER} .` 的工作流")
 
     # 2) 本地钩子：pre-commit 配置里必须有它
-    pc = ctx.read(".pre-commit-config.yaml")
+    pc = code_only(ctx.read(".pre-commit-config.yaml"))
     if CHECKER in pc:
         triggers.append("pre-commit")
     else:
@@ -52,7 +56,7 @@ def check(ctx):
         for fn in os.listdir(wf_dir):
             if not fn.endswith((".yml", ".yaml")):
                 continue
-            body = ctx.read(os.path.join(wf_dir, fn))
+            body = code_only(ctx.read(os.path.join(wf_dir, fn)))
             if CHECKER not in body:
                 continue
             if "fetch-depth" not in body:

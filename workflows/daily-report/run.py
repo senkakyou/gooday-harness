@@ -5,6 +5,7 @@
 替代原来的 daily-ticket-report.py。
 """
 import sqlite3, json, time, os, hmac, hashlib, base64
+import sys
 import urllib.request, ssl
 from datetime import date
 
@@ -88,6 +89,32 @@ def send_message(receiver_id, content, token):
     )
     with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
         return resp.status == 200
+
+
+# ── 长内容必须分段（G21）────────────────────────────────────────────
+# 服务端 PrivateMessageController 判 content.Length > 4000 直接 400。
+# 2026-09-08 事故：灵犀一份长评审因此被整条丢掉，日志里只有三行 HTTP 400。
+# 上限与切分复用 packages/botkit/outbound，**不在这里复制第二份数字**——
+# 服务端改了 4000，只该有一处需要跟着改（G03 单一真源 / G21 限值对齐）。
+sys.path.insert(0, "/opt/gooday-harness/packages/botkit")
+from outbound import MAX_CONTENT, split          # noqa: E402
+
+
+def send_message_safe(receiver_id, content, token):
+    """超长自动分段。单段失败不 break，返回是否全部成功。"""
+    segs = split(content) if len(content) > MAX_CONTENT else [content]
+    if len(segs) > 1:
+        print(f"[daily-report] 内容 {len(content)} 字超过上限 {MAX_CONTENT}，"
+              f"分 {len(segs)} 段发送", flush=True)
+    ok_all = True
+    for s in segs:
+        try:
+            if not send_message(receiver_id, s, token):
+                ok_all = False
+        except Exception as e:
+            print(f"[daily-report] 分段发送失败：{e}", flush=True)
+            ok_all = False
+    return ok_all
 
 
 PRIORITY_LABELS = {"urgent": "🔴", "high": "🟠", "normal": "⚪", "low": "🔵"}
@@ -232,7 +259,7 @@ def main():
         report = report[:987] + "..."
 
     try:
-        ok = send_message(ADMIN_ID, report, token)
+        ok = send_message_safe(ADMIN_ID, report, token)
         print("[lingxi-daily] 日报发送 ✅" if ok else "[lingxi-daily] 发送失败", flush=True)
     except Exception as e:
         print(f"[lingxi-daily] 发送异常: {e}", flush=True)
