@@ -14,6 +14,20 @@
 import os
 import re
 
+# 全 ASCII 规则的豁免：**只给创作源，不给代码和配置**。
+#
+# content/ 装的是稿件（AGENTS.md 里与 docs/ 并列的独立类别）。
+# 稿件的文件名【本身就是作品的一部分】——「序寂·六卷全本.txt」、
+# 「投稿短篇.docx」是要交出去的东西，改成拼音等于改了作者的命名。
+#
+# 【豁免的前提是工具链真的扛得住，不是"算了不查了"】。2026-09-08 加序寂素材时
+# 当场验证过两件事，验完才敢加这条：
+#   · check.py 的 tracked() 用 -c core.quotepath=false，12 个中文路径全部能按名打开
+#   · g20 的 --fix 独立入口【当时崩了】—— 它自己拼 git ls-files 没带 quotepath，
+#     正是 G09 这条教训记录的同一个坑。修好之后才继续。
+# 换句话说：豁免的代价是「工具必须处理它」，而不是「问题不存在」。
+ASCII_EXEMPT = ("content/",)
+
 RULE = "G09"
 TITLE = "命名规则"
 
@@ -57,6 +71,8 @@ def check(ctx):
         try:
             f.encode("ascii")
         except UnicodeEncodeError:
+            if f.startswith(ASCII_EXEMPT):
+                continue
             yield ("ERROR", f"路径含非 ASCII 字符：{f}",
                    "git 会转义成 \\xxx 八进制，与 find/ls 输出对不上，"
                    "比对脚本会得出错误结论。中文写进内容，不写进文件名")

@@ -69,6 +69,12 @@ def check(ctx):
     # 3) 同名文件出现在多处 = 疑似副本
     by_name = defaultdict(list)
     for f in tracked:
+        # content/ 是【创作源】，不是配置或代码，本条的「单一真源」不适用于它：
+        # 六本书各有 ch01.md…ch10.md、各有 VOLUME-DESIGN.md，
+        # 那是结构性重名，和 README.md 到处都有是同一回事，不是副本。
+        # 【只豁免重名这一项】——.bak 备份、汇总产物那几条对 content/ 照查不误。
+        if f.startswith("content/"):
+            continue
         base = os.path.basename(f)
         # 退役归档会把执行入口改名加 `.txt`（让发现机制扫不到，见
         # examples/retired-*/README.md）。剥掉这个后缀再判——

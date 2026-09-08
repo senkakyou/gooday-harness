@@ -124,8 +124,17 @@ if __name__ == "__main__":
     import subprocess
     root = subprocess.run(["git", "rev-parse", "--show-toplevel"],
                           capture_output=True, text=True).stdout.strip()
-    files = subprocess.run(["git", "-C", root, "ls-files", "*.md"],
-                           capture_output=True, text=True).stdout.split()
+    # 【必须 -c core.quotepath=false】，且【不能用 .split()】。
+    # 两个坑都是本项目 G09 记录过的，而这条独立入口一个都没躲过：
+    #   1. git 默认把非 ASCII 文件名转义成 "docs/\346\200\273..."（带引号），
+    #      直接拿去 open() 必然 FileNotFoundError —— 2026-09-08 把序寂素材
+    #      （92 个文件，含中文名）加进来时当场崩了。
+    #      check.py 的 tracked() 早就修好了，这里没跟上：**同一个仓库里
+    #      两条取文件清单的路径，只修了一条。**
+    #   2. .split() 按空白切，文件名里有空格就被切成两半。改用 -z + \0 分隔。
+    files = [f for f in subprocess.run(
+        ["git", "-c", "core.quotepath=false", "-C", root, "ls-files", "-z", "*.md"],
+        capture_output=True, text=True).stdout.split("\0") if f]
     do_fix = "--fix" in sys.argv
     changed = 0
     for rel in files:

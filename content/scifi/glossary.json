@@ -1,0 +1,31 @@
+{
+  "_note": "术语原创查重表。新增专有名词必须先查此表(防重名/防撞已有IP/防前后不一)，且须通过宪法三问(非它不可?删了受影响?读者能懂?)。字段: term, pinyin, def, first, aliases。",
+  "_core5": ["序","序阈","崩序","逾阈","烬骨"],
+  "_demoted_白话不塞读者": ["衬底","沉序","卸序","守阈","崩序回声","序波"],
+  "_deleted机制已删": ["序场"],
+  "terms": [
+    {"term": "序", "pinyin": "xu", "def": "物理量：一小片时空里可稳定维持的‘有序复杂度’。结构/信息/计算/心智皆折算为序。", "first": "00-axioms#L4", "aliases": []},
+    {"term": "序阈", "pinyin": "xu-yu", "def": "序密度的硬上限。由区域时空体积、能量、信息几何决定。顶破即崩序。", "first": "00-axioms#L1", "aliases": ["复杂度天花板"]},
+    {"term": "崩序", "pinyin": "beng-xu", "def": "序阈被顶破后，有序结构级联降解为低序死态的不可逆事件。", "first": "00-axioms#L2", "aliases": ["退相", "祛序(名词)"]},
+    {"term": "崩序回声", "pinyin": "beng-xu-hui-sheng", "def": "崩序向外辐射的可探测序波。用于预警、考古、定位。", "first": "00-axioms#L2", "aliases": ["序波"]},
+    {"term": "序场", "pinyin": "xu-chang", "def": "局域高序密度对邻域序阈的缓慢耦合影响。高序区抬高邻居崩序风险。", "first": "00-axioms#L3", "aliases": []},
+    {"term": "沉序", "pinyin": "chen-xu", "def": "把序沉降进稳定衬底以压低局域序密度的核心续命工艺。", "first": "00-axioms#L5", "aliases": ["卸序(动作侧)"]},
+    {"term": "衬底", "pinyin": "chen-di", "def": "可稳定吸纳序的特殊物质/结构。战略级稀缺资源。", "first": "00-axioms#L5", "aliases": []},
+    {"term": "守阈", "pinyin": "shou-yu", "def": "通过有计划遗忘/降复杂度长期活在序阈之下的生存策略与信条。", "first": "00-axioms#L6", "aliases": ["持序"]},
+    {"term": "崩序遗迹", "pinyin": "beng-xu-yi-ji", "def": "越阈自毁文明留下的烬骨与序波化石。费米大寂静的实体证据。", "first": "00-axioms#L8", "aliases": ["烬骨"]},
+    {"term": "逾阈", "pinyin": "yu-yu", "def": "本应不可能的现象：结构稳定存在于序阈之上。全 IP 终极悬念。", "first": "00-axioms#L10", "aliases": []},
+    {"term": "缄庭", "pinyin": "jian-ting", "def": "守阈正统文明·『忘』。以周期卸序为国教，靠主动遗忘活得最久。核心机构:司忘。", "first": "civilizations/缄庭.md", "aliases": []},
+    {"term": "序衡会", "pinyin": "xu-heng-hui", "def": "沉序技术官僚文明·『管』。垄断衬底与序配给，银河事实央行。核心职:审序官。", "first": "civilizations/序衡会.md", "aliases": []},
+    {"term": "越澜", "pinyin": "yue-lan", "def": "逆阈异端网络·『破』。追逐逾阈、屡崩序、被定性文明杀手。成员:逾阈匠。", "first": "civilizations/越澜.md", "aliases": []},
+    {"term": "司忘", "pinyin": "si-wang", "def": "缄庭最高机构，决定文明忘掉什么、何时卸序。官职:司忘丞/司忘官。", "first": "civilizations/缄庭.md", "aliases": []},
+    {"term": "审序官", "pinyin": "shen-xu-guan", "def": "序衡会官职，核算序密度、配给序容量、划定安全间距。", "first": "civilizations/序衡会.md", "aliases": []},
+    {"term": "逾阈匠", "pinyin": "yu-yu-jiang", "def": "越澜的异端科学家/工程师，游走铁律边缘尝试逾阈。", "first": "civilizations/越澜.md", "aliases": []},
+    {"term": "私序者", "pinyin": "si-xu-zhe", "def": "缄庭地下异见者，偷藏被禁忘的记忆/知识。", "first": "civilizations/缄庭.md", "aliases": []},
+    {"term": "卸序", "pinyin": "xie-xu", "def": "缄庭式生存:主动删知识/降复杂度/稀释以压低序密度(动作侧,对应沉序)。", "first": "civilizations/缄庭.md", "aliases": []},
+    {"term": "祛序战", "pinyin": "qu-xu-zhan", "def": "战争形态:故意推高目标序场逼其崩序;因序场反噬邻域而慎用。", "first": "civilizations/序衡会.md", "aliases": []},
+    {"term": "立阈历", "pinyin": "li-yu-li", "def": "纪年法(LY),自《立阈宪章》签订起算。现今≈LY3210。", "first": "main-timeline.json", "aliases": ["LY"]},
+    {"term": "翎台", "pinyin": "ling-tai", "def": "前寂纪一颗把整星改造成算力钟的高序文明,于第九千丰年拒绝卸序而崩序。其崩序回声一万一千年后被黎斟读到。卷一楔子。", "first": "book1/ch00-01.md", "aliases": []},
+    {"term": "序波耳", "pinyin": "xu-bo-er", "def": "崩序遗迹考古装备,用于聆听/读取冻结在死物质中的崩序回声。", "first": "book1/ch00-01.md", "aliases": []},
+    {"term": "序匣", "pinyin": "xu-xia", "def": "考古者随身的证据封存器。", "first": "book1/ch00-01.md", "aliases": []}
+  ]
+}
