@@ -145,8 +145,17 @@ class Bot:
         if self._token is None:
             self.log(f"⚠️ 无 token_provider，发送中止（→{to}）")
             return False
-        return outbound.send(self.cfg["bot_id"], to, text,
-                             token_provider=self._token, tag=self.name)[0]
+        # 【必须分段】。服务端 content 上限 4000 字，超了直接 400，
+        # 整条回复消失。2026-09-08 真丢过一份灵犀写的长评审——
+        # `send_segments` 那时就存在，但没有任何人调用它，
+        # 又一个「能力写好了但没接上」（policies G17 的形状）。
+        segs = outbound.split(text)
+        if len(segs) == 1:
+            return outbound.send(self.cfg["bot_id"], to, text,
+                                 token_provider=self._token, tag=self.name)[0]
+        self.log(f"回复 {len(text)} 字，超上限，分 {len(segs)} 段发 → {to}")
+        return outbound.send_segments(self.cfg["bot_id"], to, segs,
+                                      token_provider=self._token, tag=self.name)
 
     # ── 主循环 ────────────────────────────────────────────
     def run(self):

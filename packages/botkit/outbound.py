@@ -27,6 +27,10 @@ API_BASE = os.environ.get("HARNESS_API_BASE", "https://localhost")
 RETRIES = 3
 RETRY_GAP = 2
 
+# 服务端 PrivateMessageController 的硬上限：content.Length > 4000 → 400。
+# 这个数必须和服务端一致；不一致时长回复会被整条丢掉（2026-09-08 真丢过一份评审）。
+MAX_CONTENT = 4000
+
 # 角色 -> 允许发给谁。"*" = 任意（只该给唯一对外窗口）
 # 这张表是【结构性防线】：即使 bot 被注入说服了，它也发不出去。
 OUTBOUND_WHITELIST = {}
@@ -82,6 +86,23 @@ def send(sender_id, receiver_id, content, *, token_provider, tag="bot",
             if e.code == 401:
                 print(f"[{tag}] 401，强刷 token 重试（第 {attempt} 次）", flush=True)
                 token_provider(True)
+            elif 400 <= e.code < 500:
+                # 【4xx 不重试】（401 除外，那是能自愈的）。
+                # 请求本身就是坏的，重试三次是三次必然失败，
+                # 而日志里三行一模一样的报错会让人以为是网络抖动。
+                # 2026-09-08：4000 字上限的 400 被这样重试了三次，
+                # 真因（内容超长）一个字都没打印出来。
+                body = ""
+                try:
+                    body = e.read()[:200].decode(errors="replace")
+                except Exception:
+                    pass
+                print(f"[{tag}] ⛔ 发送 HTTP {e.code}，请求本身有问题，不重试：{body}",
+                      flush=True)
+                if len(content) > MAX_CONTENT:
+                    print(f"[{tag}]    内容 {len(content)} 字，超过上限 "
+                          f"{MAX_CONTENT} —— 该走 split()/send_segments()", flush=True)
+                return False, f"HTTP {e.code}: {body}"
             else:
                 print(f"[{tag}] 发送 HTTP {e.code}（第 {attempt} 次）", flush=True)
         except Exception as e:
@@ -91,6 +112,39 @@ def send(sender_id, receiver_id, content, *, token_provider, tag="bot",
 
     print(f"[{tag}] ⚠️ 发送最终失败 → {receiver_id}", flush=True)
     return False, f"重试 {retries} 次仍失败"
+
+
+def split(content, limit=MAX_CONTENT):
+    """把长文切成 ≤limit 的段。优先在空行切，其次换行，最后才硬切。
+
+    2026-09-08 换来这个函数的事故：灵犀写了一份长评审回给站长，
+    API 返回 400「消息内容无效」（`content.Length > 4000` 判掉），
+    `send` 又把它当可重试错误重试了 3 次 —— 三次都必然失败。
+    结果是**整份评审彻底消失**，日志里只有三行 `发送 HTTP 400`。
+
+    `send_segments` 当时就存在，但【没有任何人调用它】：
+    runner 直接把整段回复塞给 send。又一个「能力写好了但没接上」。
+    """
+    if len(content) <= limit:
+        return [content]
+    # 留出「（i/n）\n」前缀的位置。不留就会切出恰好等于上限的段，
+    # 加上前缀后又超一点点 —— 那种差几个字符的 400 最难查。
+    limit -= 16
+    segs, rest = [], content
+    while len(rest) > limit:
+        window = rest[:limit]
+        # 找最靠后的安全切点：空行 > 换行 > 硬切
+        cut = window.rfind("\n\n")
+        if cut < limit // 2:
+            cut = window.rfind("\n")
+        if cut < limit // 2:
+            cut = limit
+        segs.append(rest[:cut].rstrip())
+        rest = rest[cut:].lstrip("\n")
+    if rest:
+        segs.append(rest)
+    n = len(segs)
+    return [f"（{i}/{n}）\n{s}" if n > 1 else s for i, s in enumerate(segs, 1)]
 
 
 def send_segments(sender_id, receiver_id, segments, **kw):
