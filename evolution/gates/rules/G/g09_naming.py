@@ -66,6 +66,12 @@ def check(ctx):
         base = os.path.basename(f)
         if base in EXEMPT:
             continue
+        # `_` 开头 = 模板 / 内部件，不是受管对象（G09 表里就是这么写的）。
+        # 原来漏了这一条：`rules/_srclib.py`（规则共用库，load_rules 明确跳过
+        # `_` 开头的文件）被要求叫 `<层><NN>_xxx.py` —— 而它根本不是一条规则。
+        # 2026-09-08 撞到：文件未跟踪时不报，一提交就报，症状还带延迟。
+        if base.startswith("_"):
+            continue
         for prefix, (pat, howto) in RULES.items():
             if f.startswith(prefix) and "/" not in f[len(prefix):]:
                 if not pat.match(base):

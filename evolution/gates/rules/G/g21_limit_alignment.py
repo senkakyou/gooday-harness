@@ -14,7 +14,12 @@
 不查「有没有调用 split()」：那要做调用图分析，用 grep 做只会误判。
 查限值对齐是**能被机械判定**的那部分，剩下的靠 outbound.send 的 4xx 早退兜底。
 """
+import os
 import re
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _srclib import code_only                                        # noqa: E402
 
 RULE = "G21"
 TITLE = "客户端与服务端限值对齐"
@@ -35,9 +40,15 @@ CLIENT_PAT = re.compile(r"^MAX_CONTENT\s*=\s*(\d+)", re.M)
 # 【窟窿不在调用图，在作用域】——2026-09-08 灵犀评审指出。
 SENDER_PAT = re.compile(r"/api/messages/")
 SCAN_DIRS = ("packages", "workflows", "services")
-# 认可的兜底方式：自己声明上限，或者复用 botkit 的（import 那两个名字之一）
-BORROWS_PAT = re.compile(r"\bMAX_CONTENT\b|\bfrom outbound import\b|"
-                         r"\boutbound\.split\b|\b_ob\.split\b")
+# 认可的兜底方式：自己声明上限，或者复用 botkit 的分段能力。
+#
+# 【故意不认「import 了 outbound」这么松的形态】：coo-patrol 就 import 了它，
+# 却只借 allowed() 做白名单，split() 的坑照踩 —— **半个能力不算兜底**。
+# 必须点名用到 split / send_each / MAX_CONTENT 之一才算数。
+BORROWS_PAT = re.compile(
+    r"\bMAX_CONTENT\b"
+    r"|\b(?:outbound|_ob)\.(?:split|send_each|send_segments)\b"
+    r"|\bfrom\s+outbound\s+import\b[^\n]*\b(?:split|send_each|send_segments)\b")
 
 
 def check(ctx):
@@ -74,7 +85,13 @@ def check(ctx):
 
     # ── 作用域检查：每一个往 /api/messages/ POST 的文件都要认识这个上限 ──
     for path in _py_files(ctx):
-        src = ctx.read(path)
+        # 【剥注释再判】。本轮最刺眼的一处：g04/g17 都堵了这个洞，
+        # 唯独当事人 g21 自己在用原始文本 —— 于是
+        #     # TODO: 之后复用 outbound 的 MAX_CONTENT，先这样
+        # 这么一行注释就能让本规则报绿，而 bug 原样在。
+        # 【只剥注释，不剥字符串】：`/api/messages/` 恰恰长在 f-string 里，
+        # 剥了字符串本规则就永远发现不了发送方——那是更糟的假绿。
+        src = code_only(ctx.read(path))
         if not SENDER_PAT.search(src):
             continue
         if BORROWS_PAT.search(src):

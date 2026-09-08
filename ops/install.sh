@@ -192,14 +192,19 @@ if [[ -f "$REPO/.env" ]]; then
         miss="$(cd "$REPO/ops/docker" && docker compose config 2>/dev/null \
                 | grep -oP '(?<=Jwt__Secret: )\S*' || true)"
         if [[ -z "$miss" ]]; then
-            echo "    ⚠️ docker compose config 里 Jwt__Secret 仍是空 —— 密钥不会传进容器，"
+            # 【这条比 nginx 语法错重得多】：密钥空展开 = 容器 running、日志没红、
+            # 每个请求 500，整站挂掉（2026-09-07 真事故，见上面那段注释）。
+            # 原来只打一句 ⚠️ 然后 exit 0 —— 那正是本脚本要消灭的形态。
+            echo "    ❌ docker compose config 里 Jwt__Secret 仍是空 —— 密钥不会传进容器，"
             echo "       起来之后每个请求都会 500。先检查 $REPO/.env 里有没有 JWT_SECRET"
+            INSTALL_FAILED=1
         else
             echo "    ✅ 插值验证通过（Jwt__Secret 非空）"
         fi
     fi
 else
-    echo "    ⚠️ $REPO/.env 不存在，跳过。api 起来后会因缺密钥而每个请求 500"
+    echo "    ❌ $REPO/.env 不存在。api 起来后会因缺密钥而每个请求 500"
+    INSTALL_FAILED=1
 fi
 
 # ── 4. ops/nginx/conf.d/* —— 它【就是】容器的挂载源，不需要拷贝 ────────
@@ -318,8 +323,14 @@ fi
 log "reload + 重启"
 systemctl daemon-reload
 for svc in "${SERVICES[@]}"; do
-    systemctl enable --now "$svc" >/dev/null 2>&1 || true
-    systemctl restart "$svc" || echo "    ⚠️ $svc 重启失败"
+    # enable 失败也要说话。原来是 `|| true` 直接吞掉 —— 开机不自启这件事
+    # 平时完全看不出来，只在重启机器那天才发现服务没回来。
+    systemctl enable --now "$svc" >/dev/null 2>&1 \
+        || { echo "    ⚠️ $svc enable 失败（开机可能不自启）"; INSTALL_FAILED=1; }
+    # 【重启失败必须让整个脚本失败】。原来只 echo 一句，脚本照样 exit 0：
+    # 「装完了」的假象里躺着一个没起来的服务，而调用方（CI／人）看到的是成功。
+    systemctl restart "$svc" \
+        || { echo "    ❌ $svc 重启失败"; INSTALL_FAILED=1; }
 done
 
 # ── 6. 收尾校验 ────────────────────────────────────────────────────────
@@ -345,7 +356,11 @@ EOF
 
 # ── 7. 整体判死 ────────────────────────────────────────────────────────
 # 「检测到了但仍然 exit 0」和「没检测」对调用方（CI、人、上层脚本）是同一回事。
-# 前面每一处「装了但不生效」都置了 INSTALL_FAILED，在这里统一以非零退出。
+#
+# 【这句话必须是真的】：2026-09-08 第一版只在 nginx 段置了标志，
+# 而 .env 缺密钥、Jwt__Secret 空展开、服务 enable/restart 失败三处仍是光 echo。
+# 于是这条注释本身成了假话 —— 假绿没消除，只是从 nginx 段挪到了别的段。
+# 现在这四类都置标志。**再加新的「装了但不生效」判断时，一并置上。**
 if (( INSTALL_FAILED )); then
     echo
     echo "❌ 安装完成，但上面有【装了却不生效】的项——退出码 1。"

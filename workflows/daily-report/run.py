@@ -94,27 +94,17 @@ def send_message(receiver_id, content, token):
 # ── 长内容必须分段（G21）────────────────────────────────────────────
 # 服务端 PrivateMessageController 判 content.Length > 4000 直接 400。
 # 2026-09-08 事故：灵犀一份长评审因此被整条丢掉，日志里只有三行 HTTP 400。
-# 上限与切分复用 packages/botkit/outbound，**不在这里复制第二份数字**——
-# 服务端改了 4000，只该有一处需要跟着改（G03 单一真源 / G21 限值对齐）。
+# 分段、上限、**失败补报**三件事都复用 packages/botkit/outbound.send_each ——
+# 不在这里搓第二份循环（G03）。自己搓的那一版漏了「补报」：单段失败时
+# 收件人看到的是一段完整的话，完全不知道后面还有（2026-09-08 灵犀评审指出）。
 sys.path.insert(0, "/opt/gooday-harness/packages/botkit")
-from outbound import MAX_CONTENT, split          # noqa: E402
+from outbound import MAX_CONTENT, send_each      # noqa: E402
 
 
 def send_message_safe(receiver_id, content, token):
-    """超长自动分段。单段失败不 break，返回是否全部成功。"""
-    segs = split(content) if len(content) > MAX_CONTENT else [content]
-    if len(segs) > 1:
-        print(f"[daily-report] 内容 {len(content)} 字超过上限 {MAX_CONTENT}，"
-              f"分 {len(segs)} 段发送", flush=True)
-    ok_all = True
-    for s in segs:
-        try:
-            if not send_message(receiver_id, s, token):
-                ok_all = False
-        except Exception as e:
-            print(f"[daily-report] 分段发送失败：{e}", flush=True)
-            ok_all = False
-    return ok_all
+    """超长自动分段；单段失败不 break，最后补一条「第 x/y 段失败」。"""
+    return send_each(content, lambda seg: send_message(receiver_id, seg, token),
+                     tag="daily-report")
 
 
 PRIORITY_LABELS = {"urgent": "🔴", "high": "🟠", "normal": "⚪", "low": "🔵"}

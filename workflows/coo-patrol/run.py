@@ -261,21 +261,33 @@ def send_as(uid, uname, role, receiver_id, content):
         return None
     # 【超长必须分段】。服务端判 content.Length > 4000 直接 400，整条丢掉
     # （2026-09-08 事故，见 docs/incidents/2026-09-08-long-reply-dropped.md）。
-    # 巡检报告正是最容易写长的那类，而这里以前只借了 outbound 的 allowed()、
-    # 没借它的 split() —— **只借了半个能力**，另一半的坑照样踩。
-    # 上限与切法都复用 outbound，不在这里复制第二份数字（G03 / G21）。
+    # 巡检报告正是最容易写长的那类。
+    #
+    # 这里的自嘲写过两遍了，第二遍是灵犀 2026-09-08 复评指出的：
+    #   第一版只借了 outbound 的 allowed()  —— 半个能力，split() 的坑照踩；
+    #   第二版借了 split() 却自己搓循环     —— 还是半个，漏了「失败补报」，
+    #                                          而且只返回最后一段的结果，
+    #                                          前面段失败调用方完全看不见。
+    # 现在整段交给 outbound.send_each：分段、逐段发、失败补报三件事只有一份。
+    ok_all = True
+
+    def _one(seg):
+        nonlocal ok_all
+        r = api_call("POST", f"/api/messages/{receiver_id}", {"content": seg},
+                     uid=uid, uname=uname, role=role)
+        good = not (isinstance(r, dict) and r.get("error"))
+        if not good:
+            ok_all = False
+        return good
+
     try:
-        segs = _ob.split(content) if len(content) > _ob.MAX_CONTENT else [content]
+        _ob.send_each(content, _one, tag="coo-patrol")
     except Exception as e:
-        log(f"⚠️ 分段失败，按单段发（可能被服务端判 400）：{e}")
-        segs = [content]
-    if len(segs) > 1:
-        log(f"内容 {len(content)} 字超过上限 {_ob.MAX_CONTENT}，分 {len(segs)} 段发送")
-    last = None
-    for s in segs:
-        last = api_call("POST", f"/api/messages/{receiver_id}", {"content": s},
+        # 分段器本身出问题不该把消息吃掉：退回单段直发，并说清楚降级了。
+        log(f"⚠️ 分段发送异常，退回单段直发（可能被服务端判 400）：{e}")
+        return api_call("POST", f"/api/messages/{receiver_id}", {"content": content},
                         uid=uid, uname=uname, role=role)
-    return last
+    return {"ok": ok_all}
 
 # ═══ 2026-09-07：coo-patrol 不再自己动手 ═══════════════════════════
 #

@@ -20,12 +20,15 @@ TITLE = "部署可重建"
 INSTALL = "ops/install.sh"
 
 # 扩展点 -> 安装脚本里必须出现的通配扫描形态（正则任一命中即算过）
+# `["']?` 是必须的：`for dir in "$REPO/services"/*/` 是完全合法的写法，
+# 引号恰好闭在目录名和 glob 之间。写死 `services/\*` 会把它判成「没有扫描」——
+# **那是靠写法运气过的规则，不是靠语义**（2026-09-08 灵犀实测的假红）。
 MUST_GLOB = {
-    "services": [r"services/\*", r"services/\$\{?\w+\}?/deploy"],
-    "workflows": [r"workflows/\*", r"workflows/\$\{?\w+\}?/deploy"],
+    "services": [r"services[\"']?/\*", r"services/\$\{?\w+\}?/deploy"],
+    "workflows": [r"workflows[\"']?/\*", r"workflows/\$\{?\w+\}?/deploy"],
     # conf.d 变体：nginx 的配置在 ops/nginx/conf.d/ 下，ops/nginx/ 根上放的是
     # 主配置 nginx.conf——扫 ops/nginx/*.conf 会抓错文件、漏掉真正的站点配置。
-    "ops/nginx": [r"ops/nginx/\*", r"ops/nginx/conf\.d/\*"],
+    "ops/nginx": [r"ops/nginx[\"']?/\*", r"ops/nginx/conf\.d[\"']?/\*"],
 }
 
 
@@ -39,7 +42,10 @@ def check(ctx):
                "没有可重复执行的安装入口，机器重建时配置必丢")
         return
 
-    src = code_only(ctx.read(INSTALL))
+    # shell：注释 ＋ echo/printf 的提示语都不算「脚本真的在做的事」。
+    # 但别的字符串要留着——`for dir in "$REPO/services"/*/` 是合法写法，
+    # 无差别剥引号会把它判成「没有扫描 services/」（2026-09-08 灵犀实测的假红）。
+    src = code_only(ctx.read(INSTALL), strip_echo=True)
 
     for point, pats in MUST_GLOB.items():
         if not ctx.exists(point):

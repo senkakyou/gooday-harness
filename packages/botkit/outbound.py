@@ -161,8 +161,51 @@ def split(content, limit=MAX_CONTENT):
     return [f"（{i}/{n}）\n{s}" if n > 1 else s for i, s in enumerate(segs, 1)]
 
 
+def send_each(content, send_one, tag="bot"):
+    """按上限分段 ＋ 逐段发 ＋ **失败补报**，把这三件事只写一次。
+
+    `send_one(text) -> bool` 由调用方给：谁有 token、走哪条路，各家不同，
+    但「怎么分段、失败了怎么说」必须只有一份（G03）。
+
+    2026-09-08 灵犀评审指出：三条铁律里的第 3 条——「单段失败不 break，
+    **最后补一条『第 x/y 段失败』**」——在 daily-report / finance-report /
+    coo-patrol 三处全都只做到一半：它们自己搓了循环，失败只体现在返回值里，
+    **收件人那边看到的还是半截话，而且不知道是半截。**
+    coo-patrol 更松，只返回最后一段的结果，前面段失败调用方完全看不见。
+
+    「借了 split() 没借 send_segments()」还是半个能力。这个函数就是那另一半。
+    """
+    segs = split(content) if len(content) > MAX_CONTENT else [content]
+    if len(segs) > 1:
+        print(f"[{tag}] 内容 {len(content)} 字超过上限 {MAX_CONTENT}，"
+              f"分 {len(segs)} 段发送", flush=True)
+    failed = []
+    for i, seg in enumerate(segs, 1):
+        try:
+            ok = bool(send_one(seg))
+        except Exception as e:
+            print(f"[{tag}] 第 {i}/{len(segs)} 段异常：{e}", flush=True)
+            ok = False
+        if not ok:
+            failed.append(i)
+    if failed:
+        # 【补报也要发出去】。不发的话收件人看到的是一段完整的话，
+        # 完全不知道后面还有——比明说「缺了几段」危险得多。
+        note = (f"⚠️ 第 {'、'.join(map(str, failed))}/{len(segs)} 段发送失败，"
+                f"内容不完整")
+        print(f"[{tag}] {note}", flush=True)
+        try:
+            send_one(note)
+        except Exception:
+            pass
+    return not failed
+
+
 def send_segments(sender_id, receiver_id, segments, **kw):
-    """分段发送。单段失败【不 break】，继续发后续段并在最后说明。"""
+    """分段发送。单段失败【不 break】，继续发后续段并在最后说明。
+
+    段已经切好了（由 send 内部或调用方切），所以这里不再切一次。
+    """
     failed = []
     for i, seg in enumerate(segments, 1):
         ok, _ = send(sender_id, receiver_id, seg, _presplit=True, **kw)
