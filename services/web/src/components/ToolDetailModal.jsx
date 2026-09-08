@@ -45,10 +45,14 @@ export default function ToolDetailModal({ tool, onClose, onLoginRequest, favorit
   const isLinkVideo = /^https?:\/\//i.test(tool.videoUrl || '')
   const embedUrl = isLinkVideo ? toEmbedUrl(tool.videoUrl) : null
 
+  // 播放数：本地先 +1 再上报。详情是打开弹窗时取的，不这么做的话
+  // 用户正看着视频、下面写着「0 次播放」，像坏了
+  const [playCount, setPlayCount] = useState(tool.videoPlayCount || 0)
   const countPlay = () => {
     if (counted.current) return
     counted.current = true
-    reportVideoPlay(tool.slug)
+    setPlayCount(n => n + 1)
+    reportVideoPlay(tool.slug).then(r => { if (r?.playCount) setPlayCount(r.playCount) })
   }
 
   const handleVideo = () => {
@@ -206,7 +210,7 @@ export default function ToolDetailModal({ tool, onClose, onLoginRequest, favorit
               />
             )}
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, fontFamily: 'var(--mono)' }}>
-              🎬 {tool.videoPlayCount || 0} 次播放
+              🎬 {playCount} 次播放
             </div>
           </div>
         )}
