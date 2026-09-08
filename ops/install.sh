@@ -83,7 +83,22 @@ for dir in "$REPO"/services/*/; do
         echo "    ℹ️  $name：已播种 config.json，记得按本机改"
     fi
     unit="$dir/deploy/unit.service"
-    [[ -f "$unit" ]] || { echo "    ⚠️ $name 缺 deploy/unit.service，跳过"; continue; }
+    if [[ ! -f "$unit" ]]; then
+        # services/ 有两种成员，判据不同（同 g06_extension_contract.py 的 POINTS 注释）：
+        #   systemd 服务 → deploy/unit.service，由本段安装
+        #   容器/构建期成员 → 由 ops/docker/docker-compose.yml 编排（api、web）
+        # 【第二种没有 unit.service 是设计如此，不是缺配置】。
+        # 原来对它们打 ⚠️ —— 每次安装都稳定出现两条永远不会被处理的警告，
+        # 那是在训练人忽略 ⚠️，而这个项目正在到处修「告警没人看」的毛病。
+        # 2026-09-08 首次端到端实跑时看到才发现。
+        if grep -qs "context:.*services/$name/" "$REPO/ops/docker/docker-compose.yml" \
+           || [[ -f "$dir/deploy/build.sh" ]]; then
+            echo "    ℹ️  $name：容器/构建期成员，由 ops/docker 编排，本段不管"
+        else
+            echo "    ⚠️ $name 缺 deploy/unit.service，跳过"
+        fi
+        continue
+    fi
 
     sed "s/{{NAME}}/$name/g" "$unit" > "$SD/gooday-harness-$name.service"
     SERVICES+=("gooday-harness-$name")
