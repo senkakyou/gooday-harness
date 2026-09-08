@@ -571,7 +571,7 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         // 旧路径→新路径映射：站内引用上面都改完了，站外的（收藏夹/别处贴的链接/搜索引擎）
         // 改不了，靠这张表在 Program.cs 里 301 兜住
         await RecordRedirectsAsync(map);
-        await db.SaveChangesAsync();
+        await SaveAndInvalidateAsync();
 
         // uploads 内静态文本文件之间的内部引用（如页面引入共享库）
         var root = Path.Combine(env.WebRootPath, "uploads");
@@ -619,7 +619,17 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
             all.Remove(r);
         }
         // 表变了，清缓存。【放在这里而不是各个调用点】——要求调用方记得清的结构，
-        // 就是在等下一次有人忘；忘了的表现是"搬完之后老链接还是断的"，很难查
+        // 就是在等下一次有人忘；忘了的表现是"搬完之后老链接还是断的"，很难查。
+        // 但这里只是"改动已进 DbContext"，还没提交，所以提交之后必须再清一次，
+        // 见 SaveAndInvalidateAsync（灵犀评审第二轮第 1 条）。
+        redirectCache.Invalidate();
+    }
+
+    // 提交 + 清缓存。【顺序不能反】：提交前清的话，并发的 /uploads 未命中请求会把
+    // 缓存重新装成"提交前的旧表"，而之后不会再有第二次失效——老链接就一直 404 到
+    // 下一次写操作为止。窗口很窄，但坏在它是静默的：没有报错，只有用户点不开。
+    private async Task SaveAndInvalidateAsync() {
+        await db.SaveChangesAsync();
         redirectCache.Invalidate();
     }
 
@@ -1020,7 +1030,7 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         // 110 条引用全断且没有任何兜底。
         var redirectMap = pairs.ToDictionary(p => p.from, p => p.to, StringComparer.Ordinal);
         await RecordRedirectsAsync(redirectMap);
-        await db.SaveChangesAsync();
+        await SaveAndInvalidateAsync();
 
         // ---- 第三遍：搬文件。中途失败则原样退回 ----
         var done = new List<(string from, string to, string fromFull, string toFull)>();
@@ -1036,11 +1046,13 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
                 try { System.IO.File.Move(p.toFull, p.fromFull); }
                 catch { undoFailed.Add(p.to); }   // 退不回来的必须报出来，不能吞
             }
-            // 退回后把刚才预写的映射行也撤掉，别留下指向空路径的死映射
+            // 退回后把刚才预写的映射行也撤掉，别留下指向空路径的死映射。
+            // 【删完要清缓存】：不清的话缓存里还留着那几条死行，这个文件将来一改名，
+            // 老地址就会 302 到一个空路径（灵犀评审第二轮第 2 条）
             if (undoFailed.Count == 0) {
                 db.UploadRedirects.RemoveRange(
                     db.UploadRedirects.Where(r => redirectMap.Keys.Contains(r.OldPath)));
-                await db.SaveChangesAsync();
+                await SaveAndInvalidateAsync();
             }
             CleanEmptyDirs(root);   // 已经建出来的空目录不留在磁盘上
             return StatusCode(500, new {
@@ -1062,6 +1074,7 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
             await db.SaveChangesAsync();
             await tx.CommitAsync();
         }
+        redirectCache.Invalidate();   // 事务提交【之后】再清一次，理由同 SaveAndInvalidateAsync
         CleanEmptyDirs(root);   // 搬空的老目录（zip/ 之类）不留着占位
 
         // 库里存的是纯文件名、而同名文件不止一处的，改写时会跳过——静默跳过等于埋雷，报出来
