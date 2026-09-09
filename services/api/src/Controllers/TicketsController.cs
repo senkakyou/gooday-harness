@@ -13,12 +13,13 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using GoodayTools.Data;
 using GoodayTools.Models;
+using GoodayTools.Services;
 namespace GoodayTools.Controllers;
 
 [ApiController]
 [Route("api/tickets")]
 [Authorize(Roles = "admin,staff")]
-public class TicketsController(AppDbContext db) : ControllerBase
+public class TicketsController(AppDbContext db, DeliveryService delivery) : ControllerBase
 {
     // ---- 工单编号生成：GD-YYYYMMDD-NNN ----
     private async Task<string> GenerateTicketNo()
@@ -252,17 +253,21 @@ public class TicketsController(AppDbContext db) : ControllerBase
                     return BadRequest(new { message = "交付不达标：存在未完成（todo）子任务，产物缺失，不得结单" });
 
                 // 项九：交付物送达校验。
-                // · 注册客户（ClientId 非空）：必须已把含交付物链接的私信发到客户本人(ReceiverId=客户 UserId)，
-                //   而非 admin/灵犀。
-                // · 线下客户（ClientId 为空）：无平台账号可验私信，但不能因此直接放行（退回-1/洞3：
-                //   否则线下单加一条收款即可空跳过交付校验结单）。改为要求人工显式确认交付——
-                //   先把 SubStatus 置为 "delivered"（独立于翻 done 的动作，可审计），方可结单。
+                // 【2026-09-09 换判据】：原来查的是「发给客户的私信里含 deliverables 这个词」——
+                // 只要那条私信里出现过这个词就算交付了，字符串匹配形同虚设。
+                // 现在交付方式改成「上架一件归属客户的私有工具」（docs/decisions/005），
+                // 判据也跟着换成查那件工具本身：归属对不对、发布没有、
+                // **在线/视频/下载三样齐不齐**（大海定的口径）。
+                // 判定在 DeliveryService.BlockDoneReasonAsync，和上架端点共用同一份，
+                // 不再出现"闸门和上架各说各话"。
+                //
+                // · 线下客户（ClientId 为空）：没有平台账号，交付物挂不到谁名下，
+                //   仍走人工显式确认（SubStatus=delivered）。不能直接放行——
+                //   否则线下单加一条收款就能空跳过交付校验结单（退回-1/洞3）。
                 if (t.ClientId != null)
                 {
-                    var deliveredToClient = await db.PrivateMessages.AnyAsync(pm =>
-                        pm.ReceiverId == t.ClientId && pm.Content.Contains("deliverables"));
-                    if (!deliveredToClient)
-                        return BadRequest(new { message = "交付物未送达客户本人（无含下载链接的客户私信），不得结单（done）" });
+                    var blocked = await delivery.BlockDoneReasonAsync(t);
+                    if (blocked != null) return BadRequest(new { message = blocked });
                 }
                 else if (t.SubStatus != "delivered")
                 {

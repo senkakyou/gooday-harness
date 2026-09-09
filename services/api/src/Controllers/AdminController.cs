@@ -825,6 +825,105 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         return Ok(new { dryRun = false, deleted, totalSize });
     }
 
+    // ================= 定制需求的交付：上架到工具一览 =================
+    // 大海的口径：交付我不介入，灵犀上架、如意通知客户，交付物在线+视频+下载三样全。
+    // 所以这个端点是给【灵犀】调的，不是给人在后台点的。
+
+    public record DeliverDto(
+        int TicketId,
+        string? Name, string? Description, string? Category, string? IconEmoji,
+        string? OnlineUrl,          // uploads 下相对路径，须在 private/<工单号>/ 里
+        string? DownloadFileName,
+        string? VideoUrl, int VideoDuration = 0,
+        string? ReadmeMarkdown = null);
+
+    // POST /api/admin/tools/deliver —— 把一张工单的交付物上架成客户的私有工具
+    //
+    // 【幂等】：同一张工单反复调用是更新同一件，不会建出第二件。
+    // 灵犀的用法就是"传一样调一次"——先有在线版和下载包时调一次（这时缺视频，
+    // 返回 complete=false），讲解片出完再调一次；三样齐的那一次自动让如意通知客户。
+    //
+    // 【不要用通用的 PUT /api/admin/tools/{id} 来干这件事】：那个是整体覆盖语义，
+    // 少传一个字段就把它清空（我自己的回归脚本就这么把视频字段清过一次）。
+    [HttpPost("tools/deliver")]
+    public async Task<IActionResult> Deliver([FromBody] DeliverDto dto, [FromServices] DeliveryService delivery)
+    {
+        var ticket = await db.Tickets.FirstOrDefaultAsync(t => t.Id == dto.TicketId);
+        if (ticket == null) return NotFound(new { message = $"工单 #{dto.TicketId} 不存在" });
+        if (ticket.ClientId is not int clientId)
+            return BadRequest(new { message =
+                "这张工单没有关联平台账号（线下客户），没法把交付物挂到谁名下。" +
+                "先让客户注册并在工单里绑定 ClientId，或者走老路（私信发链接）。" });
+
+        var tool = await delivery.ForTicketAsync(dto.TicketId);
+        if (tool == null) {
+            var baseSlug = SanitizeSegment(dto.Name ?? ticket.Title).ToLowerInvariant();
+            var slug = $"d-{ticket.TicketNo.ToLowerInvariant()}";
+            if (await db.Tools.AnyAsync(t => t.Slug == slug)) slug += "-" + Guid.NewGuid().ToString("N")[..6];
+            tool = new Tool {
+                Slug = slug,
+                Name = dto.Name ?? ticket.Title,
+                Description = dto.Description ?? ticket.Description,
+                Category = dto.Category ?? "定制",
+                IconEmoji = dto.IconEmoji ?? "📦",
+                SourceTicketId = ticket.Id,
+                // 【默认私有，且只有本单客户】。这两条不接受调用方覆盖——
+                // 交付物默认给全站看，是这套设计里最不能出的错
+                OwnerUserId = clientId,
+                Visibility = "private",
+                IsPublished = true,
+                RequireLogin = true,
+                Folder = delivery.PrivateDirFor(ticket.TicketNo),
+            };
+            db.Tools.Add(tool);
+        }
+
+        // 传了才更新，没传保持原样——灵犀是分几次把三样凑齐的
+        if (dto.Name is not null) tool.Name = dto.Name;
+        if (dto.Description is not null) tool.Description = dto.Description;
+        if (dto.Category is not null) tool.Category = dto.Category;
+        if (dto.IconEmoji is not null) tool.IconEmoji = dto.IconEmoji;
+        if (dto.ReadmeMarkdown is not null) tool.ReadmeMarkdown = dto.ReadmeMarkdown;
+        if (dto.OnlineUrl is not null) { tool.OnlineUrl = dto.OnlineUrl; tool.IsOnline = true; }
+        if (dto.DownloadFileName is not null) { tool.DownloadFileName = dto.DownloadFileName; tool.HasDownload = true; }
+        if (dto.VideoUrl is not null) {
+            var (vurl, vsrc) = NormalizeVideo(dto.VideoUrl);
+            tool.VideoUrl = vurl; tool.VideoSource = vsrc;
+        }
+        if (dto.VideoDuration > 0) tool.VideoDuration = dto.VideoDuration;
+        tool.OwnerUserId = clientId;                 // 每次都钉死，防止被别的路径改歪
+        tool.SourceTicketId = ticket.Id;
+        tool.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+
+        var status = delivery.Check(tool);
+        var notified = false;
+        if (status.Complete)
+            notified = await delivery.NotifyCustomerAsync(tool, ticket);
+
+        return Ok(new {
+            toolId = tool.Id, tool.Slug, tool.Name,
+            ownerUserId = tool.OwnerUserId, tool.Visibility,
+            complete = status.Complete,
+            missing = status.Missing,
+            notified,
+            hint = status.Complete
+                ? (notified ? "三样齐了，已让如意通知客户" : "三样齐了，之前已通知过，不重复打扰")
+                : "还差东西，先不通知客户——交付对客户必须是原子的，别让他看见半成品",
+        });
+    }
+
+    // GET /api/admin/tools/deliver/{ticketId} —— 查这张工单的交付进度（灵犀轮询用）
+    [HttpGet("tools/deliver/{ticketId:int}")]
+    public async Task<IActionResult> DeliverStatus(int ticketId, [FromServices] DeliveryService delivery)
+    {
+        var tool = await delivery.ForTicketAsync(ticketId);
+        if (tool == null) return Ok(new { exists = false, complete = false, missing = new[] { "还没上架" } });
+        var st = delivery.Check(tool);
+        return Ok(new { exists = true, toolId = tool.Id, tool.Slug, tool.Name, tool.Visibility,
+                        complete = st.Complete, missing = st.Missing });
+    }
+
     // ================= 一工具一文件夹：归置 =================
     // 分两步走，【plan 只算不动，apply 只动不算】：
     // apply 收的是一份明确的搬运清单，不是自己再算一遍——

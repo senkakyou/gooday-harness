@@ -82,6 +82,9 @@ builder.Services.AddScoped<NotificationService>(); // 站内通知
 builder.Services.AddScoped<ScheduleOcrService>();  // 课表照片识别（视觉模型，缺省 mock）
 // uploads 旧链接映射：单例内存缓存，写方显式失效（见 UploadRedirectCache 注释）
 builder.Services.AddSingleton<UploadRedirectCache>();
+// 交付：三样齐不齐的判定 + 通知客户。上架端点和工单结单闸门【共用它】，
+// 两处各写一套的下场就是原来那个「私信里含 deliverables 就算交付」
+builder.Services.AddScoped<DeliveryService>();
 builder.Services.AddHttpClient("vision");          // 识别服务出站请求
 
 // 注册控制器（所有 Controller 类自动被发现）
