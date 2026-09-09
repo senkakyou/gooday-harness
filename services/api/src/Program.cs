@@ -169,6 +169,14 @@ app.Use(async (ctx, next) => {
         ctx.Response.StatusCode = 404;
         return;
     }
+    // 客户交付物：整段禁止静态直链。
+    // 【这是"私有"两个字的全部依据】——文件放在静态目录下，不拦就是公开的，
+    // 只是没人知道路径而已；而路径会出现在浏览器历史、日志、转发的链接里。
+    // 唯一的取文件入口是 /api/tools/{slug}/online|video|download，那里查归属。
+    if (ctx.Request.Path.StartsWithSegments("/uploads/private", StringComparison.OrdinalIgnoreCase)) {
+        ctx.Response.StatusCode = 404;
+        return;
+    }
     await next();
 });
 // 静态文件：补 .epub 等内置 MIME 列表外的类型（否则 UseStaticFiles 对未知扩展名返回 404，

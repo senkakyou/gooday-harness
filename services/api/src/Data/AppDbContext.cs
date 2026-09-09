@@ -112,6 +112,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         // 唯一索引：一个旧路径只能指向一个新路径（同一文件多次搬家时改写既有行，不新增）
         m.Entity<UploadRedirect>().HasIndex(r => r.OldPath).IsUnique();
 
+        // 索引：每次打开工具一览都要查"这个人自己的交付物"
+        m.Entity<Tool>().HasIndex(t => t.OwnerUserId);
+
         // 唯一索引：订单号不能重复
         m.Entity<Order>().HasIndex(o => o.OrderNo).IsUnique();
         m.Entity<Order>().HasIndex(o => o.UserId);  // 普通索引，加速按用户查订单

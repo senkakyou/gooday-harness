@@ -18,6 +18,11 @@ export const getTool = (slug) =>
 export const reportVideoPlay = (slug) =>
   client.post(`/tools/${slug}/video-play`).then(r => r.data).catch(() => null)
 
+// 交付物的归属人自己切公开/私有：PUT /api/tools/:slug/visibility
+// 不需要审核——公开就是真公开，和站方工具一视同仁
+export const setToolVisibility = (slug, visibility) =>
+  client.put(`/tools/${slug}/visibility`, { visibility }).then(r => r.data)
+
 // 获取所有分类：GET /api/categories
 export const getCategories = () =>
   client.get('/categories').then(r => r.data)

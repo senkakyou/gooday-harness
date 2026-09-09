@@ -37,6 +37,22 @@ public class Tool
     public int DownloadCount { get; set; }          // 累计下载次数（每次下载自动+1）
     public int ViewCount { get; set; }              // 累计浏览次数（每次看详情自动+1）
 
+    // ---- 归属与可见性（定制需求的交付物走这套）----
+    // 交付方式：做完的东西直接进工具一览，但只有提需求的人看得见，他自己可以改成公开。
+    //
+    // OwnerUserId 为 null = 站方工具（现存 103 个都是），一律公开可见。
+    // 非 null = 某位客户的交付物，默认 private，只有他本人（和站长）看得见。
+    // 【可见性只由 Visibility 一个字段判定】，不再加"IsPrivate"之类的第二个开关——
+    // 两个字段迟早互相打架，而这次打架的后果是「本该只有客户看到的东西挂在首页」。
+    // 【不设 Owner 导航属性】：SQLite 给已有表加外键要整表重建，为一个约束
+    // 重建生产表不划算。这里只存 Id，要用户信息时按 Id 查。
+    public int? OwnerUserId { get; set; }
+    public string Visibility { get; set; } = "public";   // public | private
+
+    // 这个交付物是哪张工单来的。工单结单闸门查它——
+    // 比原来"客户私信里出现过 deliverables 这个词"可靠得多
+    public int? SourceTicketId { get; set; }
+
     public bool IsPublished { get; set; } = true;  // 是否已发布（false 则前台不显示）
     public bool RequireLogin { get; set; } = true; // 是否需要登录才能下载
 

@@ -18,12 +18,33 @@ namespace GoodayTools.Controllers;
 [Route("api/[controller]")]
 public class ToolsController(AppDbContext db, IWebHostEnvironment env, SubscriptionService sub) : ControllerBase
 {
+    // 当前请求者的用户 Id（没登录返回 null）
+    private int? MeOrNull()
+        => int.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var id) ? id : null;
+
+    // 【可见性判定只有这一处】。列表、详情、下载、在线运行、视频、分类计数
+    // 全部走它——判定散在各处，迟早有一处漏掉，而漏掉的表现是
+    // 「本该只有客户看到的交付物挂在首页上」，这种错误没有报警会一直存在。
+    //
+    //   站方工具（OwnerUserId 为 null）→ 一律公开
+    //   客户交付物 → Visibility=public 时公开；private 时只有本人和站长看得到
+    private IQueryable<Tool> Visible(IQueryable<Tool> q)
+    {
+        var me = MeOrNull();
+        if (User.IsInRole("admin")) return q;                    // 站长看全部，否则没法排查
+        return q.Where(t => t.Visibility == "public" || (me != null && t.OwnerUserId == me));
+    }
+
     // GET /api/tools?category=效率工具
-    // 返回已发布工具列表，可按分类筛选
+    // 返回已发布工具列表，可按分类筛选。
+    // 带 token 时会连同「自己的私有交付物」一起返回——交付物就长在工具一览里
     [HttpGet]
     public async Task<IActionResult> List([FromQuery] string? category)
     {
-        var q = db.Tools.Where(t => t.IsPublished);  // 只返回已发布的
+        // 【先取出来存本地变量】：把 MeOrNull() 直接写进 LINQ 表达式，
+        // EF 翻不成 SQL（方法调用不在可翻译集合里），运行期才炸
+        var me = MeOrNull();
+        var q = Visible(db.Tools.Where(t => t.IsPublished));  // 只返回已发布 + 当前身份可见的
         if (!string.IsNullOrEmpty(category)) q = q.Where(t => t.Category == category);
         return Ok(await q.OrderByDescending(t => t.CreatedAt)
             .Select(t => new {
@@ -34,7 +55,9 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
                 t.IsPaid, t.Price, t.CreatedAt,
                 // 视频讲解：列表只要"有没有"和"多长"，URL 到详情再给
                 hasVideo = t.VideoUrl != null && t.VideoUrl != "",
-                t.VideoDuration
+                t.VideoDuration,
+                // 卡片上要能一眼看出"这是我的、别人看不见"
+                t.Visibility, isMine = t.OwnerUserId != null && t.OwnerUserId == me
             }).ToListAsync());
     }
 
@@ -43,11 +66,45 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
     [HttpGet("{slug}")]
     public async Task<IActionResult> Detail(string slug)
     {
-        var tool = await db.Tools.FirstOrDefaultAsync(t => t.Slug == slug && t.IsPublished);
+        var tool = await Visible(db.Tools.Where(t => t.IsPublished))
+            .FirstOrDefaultAsync(t => t.Slug == slug);
+        // 【不可见就是 404，不是 403】：403 等于告诉外人"这个 slug 存在"，
+        // 私有交付物连存在性都不该外泄
         if (tool == null) return NotFound();
         tool.ViewCount++;  // 每次访问详情页计一次浏览量
         await db.SaveChangesAsync();
-        return Ok(tool);
+
+        var me = MeOrNull();
+        return Ok(new {
+            tool.Id, tool.Name, tool.Slug, tool.Description, tool.Category, tool.IconEmoji,
+            tool.IsOnline, tool.HasDownload, tool.DownloadCount, tool.ViewCount,
+            tool.RequireLogin, tool.IsPaid, tool.Price, tool.ReadmeMarkdown,
+            tool.VideoSource, tool.VideoDuration, tool.VideoPlayCount,
+            tool.Visibility, tool.SourceTicketId, tool.CreatedAt,
+            isMine = tool.OwnerUserId != null && tool.OwnerUserId == me,
+            // 私有工具的文件【不给真实路径】，给鉴权取文件的接口地址。
+            // 真实路径 /uploads/private/... 在静态层是死的，但把它发到前端等于
+            // 白白多一处泄露面——外面拿到路径就会去试
+            onlineUrl = ServeUrl(tool, tool.OnlineUrl, "online"),
+            videoUrl = ServeUrl(tool, tool.VideoUrl, "video"),
+        });
+    }
+
+    // 放在 uploads/private/ 下的文件一律换成鉴权接口地址；其它原样返回。
+    //
+    // 【判据是"文件存在哪"，不是"当前可见性"】。第一版按 Visibility 判，
+    // 结果客户把交付物切成公开之后，详情返回的是真实路径 /uploads/private/...，
+    // 而静态层对这个前缀一律 404 —— 公开之后反而谁都打不开，还顺带把真实路径发了出去。
+    // 存储位置不会随一次点击而改变，可见性会，所以该由前者决定怎么送。
+    private static string? ServeUrl(Tool t, string? raw, string kind)
+    {
+        if (string.IsNullOrEmpty(raw)) return raw;
+        if (raw.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || raw.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return raw;
+        var rel = raw.Replace('\\', '/').TrimStart('/');
+        if (!rel.StartsWith("uploads/private/", StringComparison.OrdinalIgnoreCase)
+            && !rel.StartsWith("private/", StringComparison.OrdinalIgnoreCase)) return raw;
+        return $"/api/tools/{Uri.EscapeDataString(t.Slug)}/{kind}";
     }
 
     // POST /api/tools/:slug/video-play
@@ -57,7 +114,8 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
     [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("anon-count")]  // 免登录写库端点必须有闸
     public async Task<IActionResult> VideoPlay(string slug)
     {
-        var tool = await db.Tools.FirstOrDefaultAsync(t => t.Slug == slug && t.IsPublished);
+        var tool = await Visible(db.Tools.Where(t => t.IsPublished))
+            .FirstOrDefaultAsync(t => t.Slug == slug);
         if (tool == null) return NotFound();
         if (string.IsNullOrEmpty(tool.VideoUrl)) return BadRequest(new { message = "该工具没有视频讲解" });
         tool.VideoPlayCount++;
@@ -73,7 +131,9 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
     [HttpGet("{slug}/download")]
     public async Task<IActionResult> Download(string slug)
     {
-        var tool = await db.Tools.FirstOrDefaultAsync(t => t.Slug == slug && t.IsPublished);
+        // 可见性和下载权限是两件事，但【不可见的连存在都不该知道】，所以先过可见性
+        var tool = await Visible(db.Tools.Where(t => t.IsPublished))
+            .FirstOrDefaultAsync(t => t.Slug == slug);
         if (tool == null) return NotFound();
         if (!tool.HasDownload || string.IsNullOrEmpty(tool.DownloadFileName))
             return BadRequest(new { message = "该工具不支持下载" });
@@ -148,11 +208,84 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
         return PhysicalFile(fp, ct, Path.GetFileName(rel));
     }
 
+    // GET /api/tools/:slug/online —— 私有工具的在线版本体（iframe 指向这里）
+    // GET /api/tools/:slug/video  —— 私有工具的讲解视频（支持 Range，进度条能拖）
+    //
+    // 【故意不接受路径参数】。做成 /file/{*path} 那种形式的话，
+    // 就要自己防路径穿越、防越权读别的工具的文件；这里路径只从工具自己的字段来，
+    // 请求方连"读哪个文件"都决定不了，那条攻击面根本不存在。
+    // 代价是私有交付物只能是【单文件网页 + 一个下载包】，多文件网页的相对引用取不到。
+    [HttpGet("{slug}/online")]
+    public Task<IActionResult> ServeOnline(string slug) => ServeOwn(slug, "online");
+
+    [HttpGet("{slug}/video")]
+    public Task<IActionResult> ServeVideo(string slug) => ServeOwn(slug, "video");
+
+    private async Task<IActionResult> ServeOwn(string slug, string kind)
+    {
+        var tool = await Visible(db.Tools.Where(t => t.IsPublished))
+            .FirstOrDefaultAsync(t => t.Slug == slug);
+        if (tool == null) return NotFound();
+
+        var raw = kind == "video" ? tool.VideoUrl : tool.OnlineUrl;
+        if (string.IsNullOrEmpty(raw)) return NotFound();
+        if (raw.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || raw.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            return Redirect(raw);       // 外链就跳过去，没什么可保护的
+
+        var uploadRoot = Path.GetFullPath(Path.Combine(env.WebRootPath, "uploads"));
+        var rel = Uri.UnescapeDataString(raw.Replace('\\', '/').TrimStart('/'));
+        if (rel.StartsWith("uploads/", StringComparison.OrdinalIgnoreCase))
+            rel = rel["uploads/".Length..];
+        var fp = Path.GetFullPath(Path.Combine(uploadRoot, rel.Replace('/', Path.DirectorySeparatorChar)));
+        // 字段是管理员写的，但仍然规范化后确认没跑出 uploads——一个 ../../ 就能读到数据库
+        if (!fp.StartsWith(uploadRoot + Path.DirectorySeparatorChar) || !System.IO.File.Exists(fp))
+            return NotFound();
+
+        var ct = Path.GetExtension(fp).ToLower() switch {
+            ".html" or ".htm" => "text/html; charset=utf-8",
+            ".mp4" => "video/mp4",
+            ".webm" => "video/webm",
+            _ => "application/octet-stream",
+        };
+        // enableRangeProcessing：视频要能拖进度条，少了它播放器只能从头放
+        return PhysicalFile(fp, ct, enableRangeProcessing: true);
+    }
+
+    public record VisibilityDto(string Visibility);
+
+    // PUT /api/tools/:slug/visibility —— 交付物的归属人自己切公开/私有
+    // 【不需要审核】（大海 2026-09-09 定）：公开就是真公开，和站方工具一视同仁；
+    // 站长在后台可以随时把它改回私有或下架。
+    [Authorize]
+    [HttpPut("{slug}/visibility")]
+    public async Task<IActionResult> SetVisibility(string slug, [FromBody] VisibilityDto dto)
+    {
+        var v = (dto?.Visibility ?? "").Trim().ToLower();
+        if (v is not ("public" or "private"))
+            return BadRequest(new { message = "可见性只能是 public 或 private" });
+
+        var tool = await db.Tools.FirstOrDefaultAsync(t => t.Slug == slug);
+        if (tool == null) return NotFound();
+        var me = MeOrNull();
+        // 站方工具（没有归属人）不能被谁改可见性；客户只能改自己的那件
+        if (tool.OwnerUserId == null || (tool.OwnerUserId != me && !User.IsInRole("admin")))
+            return NotFound();      // 同样用 404，不确认它存在
+
+        tool.Visibility = v;
+        tool.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        return Ok(new { visibility = tool.Visibility });
+    }
+
     // GET /api/categories
     // 返回所有分类及每个分类的工具数量
+    // 【和列表用同一套可见性】：分类数只统计当前身份看得见的工具。
+    // 不这么做就会出现"分类里写着 5 个、点进去只有 4 个"——那种对不上的数字，
+    // 用户不会当成权限设计，只会当成网站坏了
     [HttpGet("/api/categories")]
     public async Task<IActionResult> Categories() =>
-        Ok(await db.Tools.Where(t => t.IsPublished)
+        Ok(await Visible(db.Tools.Where(t => t.IsPublished))
             .GroupBy(t => t.Category)
             .Select(g => new { name = g.Key, count = g.Count() })
             .ToListAsync());

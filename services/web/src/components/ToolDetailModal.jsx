@@ -12,7 +12,7 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { checkPurchase, myPurchases, submitPurchase } from '../api/purchases'
-import { downloadTool, reportVideoPlay } from '../api/tools'
+import { downloadTool, reportVideoPlay, setToolVisibility } from '../api/tools'
 import useAuthStore from '../store/authStore'
 import useToastStore from '../store/toastStore'
 import MediaContent from './forum/MediaContent'
@@ -48,6 +48,20 @@ export default function ToolDetailModal({ tool, onClose, onLoginRequest, favorit
   // 播放数：本地先 +1 再上报。详情是打开弹窗时取的，不这么做的话
   // 用户正看着视频、下面写着「0 次播放」，像坏了
   const [playCount, setPlayCount] = useState(tool.videoPlayCount || 0)
+  // 归属人自己切公开/私有。不需要审核，切完立刻生效
+  const [vis, setVis] = useState(tool.visibility || 'public')
+  const [visBusy, setVisBusy] = useState(false)
+  const toggleVis = async () => {
+    const next = vis === 'private' ? 'public' : 'private'
+    setVisBusy(true)
+    try {
+      const r = await setToolVisibility(tool.slug, next)
+      setVis(r.visibility)
+      toast(r.visibility === 'public' ? '已公开，所有人都能在工具一览里看到' : '已设为仅自己可见')
+    } catch (e) { toast(e.message, true) }
+    finally { setVisBusy(false) }
+  }
+
   const countPlay = () => {
     if (counted.current) return
     counted.current = true
@@ -154,6 +168,29 @@ export default function ToolDetailModal({ tool, onClose, onLoginRequest, favorit
           <span>👁 {tool.viewCount}</span>
           <span>⬇ {tool.downloadCount}</span>
         </div>
+
+        {/* 这是你的交付物：公开 / 仅自己可见，你自己说了算 */}
+        {tool.isMine && (
+          <div style={{
+            marginTop: '0.875rem', padding: '0.75rem 0.875rem', borderRadius: 10,
+            background: 'var(--surface2)', border: '1px solid var(--border)',
+            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          }}>
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+                {vis === 'private' ? '🔒 仅自己可见' : '🌐 已公开'}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.5 }}>
+                {vis === 'private'
+                  ? '这是给你做的交付物，现在只有你能在工具一览里看到它'
+                  : '所有人都能在工具一览里看到并使用它，随时可以改回私有'}
+              </div>
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={toggleVis} disabled={visBusy}>
+              {visBusy ? '切换中…' : (vis === 'private' ? '公开它' : '改回私有')}
+            </button>
+          </div>
+        )}
 
 
         {/* 操作按钮区 */}

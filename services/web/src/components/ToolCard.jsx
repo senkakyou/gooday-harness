@@ -70,6 +70,21 @@ export default function ToolCard({ tool, onClick, favorited = false, onToggleFav
             background:cat.bg, color:cat.color, border:`1px solid ${cat.border}`,
             fontFamily:'var(--mono)', flexShrink:0,
           }}>{tool.category}</span>
+          {/* 交付物：让人一眼看出这是自己的、别人看不见的那件 */}
+          {tool.isMine && tool.visibility === 'private' && (
+            <span style={{
+              fontSize:10, padding:'2px 7px', borderRadius:999, flexShrink:0,
+              background:'rgba(148,163,184,0.14)', color:'#94a3b8',
+              border:'1px solid rgba(148,163,184,0.35)', fontFamily:'var(--mono)',
+            }}>🔒 仅自己可见</span>
+          )}
+          {tool.isMine && tool.visibility === 'public' && (
+            <span style={{
+              fontSize:10, padding:'2px 7px', borderRadius:999, flexShrink:0,
+              background:'rgba(16,185,129,0.10)', color:'var(--green)',
+              border:'1px solid rgba(16,185,129,0.3)', fontFamily:'var(--mono)',
+            }}>🌐 我的·已公开</span>
+          )}
         </div>
         {/* Description */}
         <div style={{

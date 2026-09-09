@@ -46,7 +46,19 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         string IconEmoji, bool IsOnline, string? OnlineUrl, bool HasDownload,
         string? DownloadFileName, bool IsPublished, bool RequireLogin, string? ReadmeMarkdown,
         bool IsPaid = false, decimal Price = 0,
-        string? VideoUrl = null, int VideoDuration = 0, string? Folder = null);
+        string? VideoUrl = null, int VideoDuration = 0, string? Folder = null,
+        int? OwnerUserId = null, string? Visibility = null, int? SourceTicketId = null);
+
+    // 归属与可见性归一：没有归属人的一律 public（站方工具），
+    // 有归属人的默认 private（客户交付物）。
+    // 【默认值只在这一处定】——散在建/改两处的话，改一处漏一处的表现是
+    // "编辑一下客户的工具，它就变公开了"
+    private static (int? Owner, string Visibility) NormalizeOwnership(int? owner, string? vis)
+    {
+        if (owner is null or <= 0) return (null, "public");
+        var v = (vis ?? "").Trim().ToLower();
+        return (owner, v == "public" ? "public" : "private");
+    }
 
     // 视频字段归一：VideoSource 不让前端自己填，从 URL 形态推出来。
     // 让它可填，迟早出现「source=link 但 URL 是站内路径」这种自相矛盾的记录，
@@ -77,6 +89,8 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
             IsPublished=dto.IsPublished,RequireLogin=dto.RequireLogin,ReadmeMarkdown=dto.ReadmeMarkdown,
             IsPaid=dto.IsPaid,Price=dto.Price,
             VideoUrl=vurl,VideoSource=vsrc,VideoDuration=Math.Max(0,dto.VideoDuration),Folder=folder };
+        var (owner, vis) = NormalizeOwnership(dto.OwnerUserId, dto.Visibility);
+        tool.OwnerUserId = owner; tool.Visibility = vis; tool.SourceTicketId = dto.SourceTicketId;
         db.Tools.Add(tool);
         await db.SaveChangesAsync();
         return Ok(tool);
@@ -98,6 +112,8 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         if (NormalizeRelDir(dto.Folder, out var folder) is string ferr) return BadRequest(new { message=ferr });
         tool.VideoUrl=vurl; tool.VideoSource=vsrc;
         tool.VideoDuration=Math.Max(0,dto.VideoDuration); tool.Folder=folder;
+        var (owner, vis) = NormalizeOwnership(dto.OwnerUserId, dto.Visibility);
+        tool.OwnerUserId = owner; tool.Visibility = vis; tool.SourceTicketId = dto.SourceTicketId;
         tool.UpdatedAt=DateTime.UtcNow;
         await db.SaveChangesAsync();
         return Ok(tool);

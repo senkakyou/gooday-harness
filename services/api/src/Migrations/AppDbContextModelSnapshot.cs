@@ -524,6 +524,9 @@ namespace GoodayTools.Migrations
                     b.Property<string>("OnlineUrl")
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("OwnerUserId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<decimal>("Price")
                         .HasColumnType("TEXT");
 
@@ -536,6 +539,9 @@ namespace GoodayTools.Migrations
                     b.Property<string>("Slug")
                         .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("SourceTicketId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("TEXT");
@@ -556,7 +562,13 @@ namespace GoodayTools.Migrations
                     b.Property<int>("ViewCount")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("Visibility")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("OwnerUserId");
 
                     b.HasIndex("Slug")
                         .IsUnique();
