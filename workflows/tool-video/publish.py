@@ -113,7 +113,15 @@ def attach(tool, video_url, duration):
                                   "videoUrl": video_url,
                                   "videoDuration": int(round(duration))}).encode(),
                  headers={"Content-Type": "application/json"})
-        return json.load(r)
+        d = json.load(r)
+        # 【回查挂到的是不是同一件】。deliver 端点按 SourceTicketId 找工具，
+        # 而那一列没有唯一约束——同一张工单万一有两件工具，视频会挂到另一件上，
+        # 而这边一切正常。（2026-09-09 灵犀评审 D）
+        if d.get("toolId") != tool.get("id"):
+            raise PublishError(
+                f"视频挂到了别的工具上：期望 #{tool.get('id')}，实际 #{d.get('toolId')}。"
+                f"多半是工单 #{tool['sourceTicketId']} 名下有不止一件交付物，先人工清一件")
+        return d
     payload = {k: tool.get(k) for k in _TOOL_FIELDS}
     payload["videoUrl"] = video_url
     payload["videoDuration"] = int(round(duration))

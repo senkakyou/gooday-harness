@@ -121,11 +121,20 @@ def notify_lingxi(text):
 
 # ---------------- 选题 ----------------
 
-def candidates(limit, ticket_id=None):
-    """挑「已收款、有平台账号、还没交付齐」的工单。
+# 【白名单，不是黑名单】。原来写的是"排除 done/cancelled/refunded/refunding/pending"，
+# 剩下的 failed 和 customer_rejected 就漏进来了——那两个状态的单都是已收款、
+# 正在议退款或返工的，机器会生成一版然后通知客户"做好了🎉"，
+# 而站长这边正准备退钱。（2026-09-09 灵犀评审 C）
+DOABLE_STATUS = ("delivering",)
 
-    【必须已收款】：和 dev bot 的闸门口径一致（金额 > 0 的 received 记录），
-    否则没付钱的单也会被做出来。
+
+def candidates(limit, ticket_id=None):
+    """挑「进入交付阶段、已收款、有平台账号、还没交付齐」的工单。
+
+    【必须已收款】：和 dev bot 的闸门口径一致（金额 > 0 的 received 记录）。
+    【收款判定必须在这里】而不是在 main() 里：放在外面的话，
+    列表最上面那张未收款的新单会天天占掉 limit=1 的唯一名额，
+    下面那些已收款的老单永远排不上——饿死，而且日志看起来一切正常。
     """
     tickets = json.load(tv._req("/api/tickets?pageSize=100"))["list"]
     out = []
@@ -133,14 +142,21 @@ def candidates(limit, ticket_id=None):
         if ticket_id and t["id"] != ticket_id:
             continue
         if not ticket_id:
-            if t["status"] in ("done", "cancelled", "refunded", "refunding", "pending"):
+            if t["status"] not in DOABLE_STATUS:
                 continue
             if not t.get("clientId"):
                 continue          # 线下客户没账号，交付物挂不到谁名下
+            if not paid(t["id"]):
+                continue
         st = json.load(tv._req(f"/api/admin/tools/deliver/{t['id']}"))
         if st.get("complete"):
             continue              # 已经交付齐了
-        out.append((t, st))
+        # 【列表接口不返回 Description】（TicketsController 的 Select 里没有它），
+        # 直接用列表里的 ticket 去生成，模型看到的就只有标题——
+        # 整条线会"按标题瞎做"，而且它做得出东西来，不报错。
+        # 必须再拉一次详情。（2026-09-09 灵犀评审 P0）
+        full = json.load(tv._req(f"/api/tickets/{t['id']}"))
+        out.append((full, st))
         if len(out) >= limit:
             break
     return out
@@ -164,8 +180,15 @@ class DeliverError(RuntimeError):
 def generate_html(ticket):
     """按需求生成单文件网页。人格与铁则来自威震天的 prompt（单一真源）。"""
     system = open(DEV_PROMPT, encoding="utf-8").read() + CONTRACT
+    desc = (ticket.get("description") or "").strip()
+    # 【需求原文为空就不做】。上一版从工单列表拿 ticket，而列表接口不返回
+    # Description，于是模型只看到标题——它照样能生成东西，不报错，
+    # 只是做的是另一件事。宁可这一轮不出，也不能按标题瞎做。
+    if len(desc) < 10:
+        raise DeliverError(f"工单 {ticket['ticketNo']} 的需求原文是空的（只有 {len(desc)} 字），"
+                           f"不按标题瞎做。检查 /api/tickets/{ticket['id']} 是否返回 description")
     ask = (f"工单 {ticket['ticketNo']}\n标题：{ticket['title']}\n\n"
-           f"需求原文：\n{ticket.get('description') or ''}\n\n按交付契约输出。")
+           f"需求原文：\n{desc}\n\n按交付契约输出。")
     text, ok, err = mdl.call(ask, system, tag=NAME, timeout=900)
     if not ok:
         raise DeliverError(f"模型调用失败：{err[:300]}", infra=mdl.is_infra_error(err))
@@ -306,9 +329,6 @@ def main():
     rc = 0
     for ticket, status in todo:
         tno = ticket["ticketNo"]
-        if not args.ticket and not paid(ticket["id"]):
-            log(f"跳过 {tno}：没有已收款记录（未收款不开工，和 dev 那道闸同口径）")
-            continue
         if progress["failed"].get(tno, 0) >= MAX_ATTEMPTS and not args.ticket:
             log(f"跳过 {tno}：已连续失败 {MAX_ATTEMPTS} 次，等人看（要重试用 --ticket）")
             continue

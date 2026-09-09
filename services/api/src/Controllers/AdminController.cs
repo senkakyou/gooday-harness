@@ -871,7 +871,10 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
                 // 交付物默认给全站看，是这套设计里最不能出的错
                 OwnerUserId = clientId,
                 Visibility = "private",
-                IsPublished = true,
+                // 【建的时候不发布】。上架发生在出片之前，如果出片失败就停在这儿，
+                // 客户的工具一览里会躺着一件能打开、但没讲解也没人通知他的半成品——
+                // 那不是"他看不到"，是"他看到一件半成品"。三样齐了才翻上架。
+                IsPublished = false,
                 RequireLogin = true,
                 Folder = delivery.PrivateDirFor(ticket.TicketNo),
             };
@@ -898,8 +901,15 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
 
         var status = delivery.Check(tool);
         var notified = false;
-        if (status.Complete)
+        if (status.Complete) {
+            // 三样齐了才让客户看见，然后才通知。顺序不能反：
+            // 先通知后发布，客户点进来会扑空
+            if (!tool.IsPublished) {
+                tool.IsPublished = true;
+                await db.SaveChangesAsync();
+            }
             notified = await delivery.NotifyCustomerAsync(tool, ticket);
+        }
 
         return Ok(new {
             toolId = tool.Id, tool.Slug, tool.Name,

@@ -35,6 +35,19 @@ public static class ToolVisibility
         return q.Where(t => t.Visibility == "public" || (me != null && t.OwnerUserId == me));
     }
 
+    /// <summary>
+    /// 单件工具能不能被这个身份取到（详情、在线版、视频、下载都用它）。
+    /// 与 VisibleTo 的区别只有一条：**站长连未发布的也能取**。
+    ///
+    /// 【为什么需要这条】：交付物是"三样齐了才发布"的，在补视频那一步它还没发布；
+    /// 而出片产线用站长身份回查"视频挂上没有"。不给站长开这个口子，
+    /// 产线会以为回查失败、把刚传好的视频撤掉——一个自己咬自己的循环。
+    /// 列表和分类计数【不用】它：那两处对站长也只列已发布的，
+    /// 免得后台草稿混进前台列表。
+    /// </summary>
+    public static IQueryable<Tool> FetchableBy(this IQueryable<Tool> q, ClaimsPrincipal user)
+        => user.IsInRole("admin") ? q : q.Where(t => t.IsPublished).VisibleTo(user);
+
     /// <summary>单个工具对这个身份是否可见（判定与上面同一套）。</summary>
     public static bool IsVisibleTo(this Tool t, ClaimsPrincipal user)
         => user.IsInRole("admin")

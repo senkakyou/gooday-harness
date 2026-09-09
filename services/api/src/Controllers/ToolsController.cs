@@ -57,8 +57,7 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
     [HttpGet("{slug}")]
     public async Task<IActionResult> Detail(string slug)
     {
-        var tool = await Visible(db.Tools.Where(t => t.IsPublished))
-            .FirstOrDefaultAsync(t => t.Slug == slug);
+        var tool = await db.Tools.FetchableBy(User).FirstOrDefaultAsync(t => t.Slug == slug);
         // 【不可见就是 404，不是 403】：403 等于告诉外人"这个 slug 存在"，
         // 私有交付物连存在性都不该外泄
         if (tool == null) return NotFound();
@@ -105,8 +104,7 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
     [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("anon-count")]  // 免登录写库端点必须有闸
     public async Task<IActionResult> VideoPlay(string slug)
     {
-        var tool = await Visible(db.Tools.Where(t => t.IsPublished))
-            .FirstOrDefaultAsync(t => t.Slug == slug);
+        var tool = await db.Tools.FetchableBy(User).FirstOrDefaultAsync(t => t.Slug == slug);
         if (tool == null) return NotFound();
         if (string.IsNullOrEmpty(tool.VideoUrl)) return BadRequest(new { message = "该工具没有视频讲解" });
         tool.VideoPlayCount++;
@@ -123,8 +121,7 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
     public async Task<IActionResult> Download(string slug)
     {
         // 可见性和下载权限是两件事，但【不可见的连存在都不该知道】，所以先过可见性
-        var tool = await Visible(db.Tools.Where(t => t.IsPublished))
-            .FirstOrDefaultAsync(t => t.Slug == slug);
+        var tool = await db.Tools.FetchableBy(User).FirstOrDefaultAsync(t => t.Slug == slug);
         if (tool == null) return NotFound();
         if (!tool.HasDownload || string.IsNullOrEmpty(tool.DownloadFileName))
             return BadRequest(new { message = "该工具不支持下载" });
@@ -214,8 +211,7 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
 
     private async Task<IActionResult> ServeOwn(string slug, string kind)
     {
-        var tool = await Visible(db.Tools.Where(t => t.IsPublished))
-            .FirstOrDefaultAsync(t => t.Slug == slug);
+        var tool = await db.Tools.FetchableBy(User).FirstOrDefaultAsync(t => t.Slug == slug);
         if (tool == null) return NotFound();
 
         // 【这里不再查 RequireLogin / IsPaid】，两个理由：
@@ -244,6 +240,24 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
             ".webm" => "video/webm",
             _ => "application/octet-stream",
         };
+
+        if (ct.StartsWith("text/html")) {
+            // 【交付物是 AI 按客户需求生成的代码，需求文本本身就是注入入口】。
+            // 它和站点同源、在没有 sandbox 的 iframe 里跑，光靠生成时的正则自检
+            // 挡不住混淆过的外带（拼字符串 eval、new Image().src=... 之类）。
+            // CSP 把"往外送"这条路堵死：不许发请求、不许提交表单、不许加载外部资源。
+            // 【故意仍允许 inline script 和 localStorage】——交付契约就是单文件网页，
+            // 计时器、统计都靠它们，禁了等于交付物全废。
+            // 真正的终局是把交付物放到独立域名（跨源），等量上来再做。
+            Response.Headers.ContentSecurityPolicy =
+                "default-src 'self' data: blob:; " +
+                "script-src 'unsafe-inline' 'unsafe-eval' 'self'; " +
+                "style-src 'unsafe-inline' 'self'; " +
+                "img-src 'self' data: blob:; media-src 'self' data: blob:; " +
+                "connect-src 'none'; form-action 'none'; frame-src 'none'; " +
+                "object-src 'none'; base-uri 'none'";
+            Response.Headers["X-Content-Type-Options"] = "nosniff";
+        }
         // enableRangeProcessing：视频要能拖进度条，少了它播放器只能从头放
         return PhysicalFile(fp, ct, enableRangeProcessing: true);
     }
@@ -268,9 +282,29 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
         if (tool.OwnerUserId == null || (tool.OwnerUserId != me && !User.IsInRole("admin")))
             return NotFound();      // 同样用 404，不确认它存在
 
+        var was = tool.Visibility;
         tool.Visibility = v;
         tool.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
+
+        // 【交付物转公开要让灵犀知道】。私有时那份 AI 生成的代码只在客户自己的
+        // 浏览器里跑，出事也只伤他自己；一旦公开，它就会在任何登录用户的同源 iframe 里跑。
+        // 不审核是大海定的（客户自己说了算），但"没人知道"和"不审核"是两回事。
+        if (was != v && v == "public" && tool.SourceTicketId != null) {
+            var lingxi = await db.Users.FirstOrDefaultAsync(u => u.Username == "灵犀");
+            var owner = await db.Users.FirstOrDefaultAsync(u => u.Id == tool.OwnerUserId);
+            if (lingxi != null) {
+                db.PrivateMessages.Add(new PrivateMessage {
+                    SenderId = lingxi.Id, SenderUsername = lingxi.Username,
+                    ReceiverId = lingxi.Id, ReceiverUsername = lingxi.Username,
+                    Content = $"【交付物转公开】{owner?.Username ?? "客户#" + tool.OwnerUserId}"
+                              + $" 把工单#{tool.SourceTicketId} 的交付物「{tool.Name}」设成了公开。\n"
+                              + $"它现在会在任何登录用户的同源 iframe 里运行。"
+                              + $"看一眼没问题就不用管，有问题在后台把 Visibility 改回 private。",
+                });
+                await db.SaveChangesAsync();
+            }
+        }
         return Ok(new { visibility = tool.Visibility });
     }
 
