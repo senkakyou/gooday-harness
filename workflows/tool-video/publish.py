@@ -100,6 +100,20 @@ def upload_video(mp4, folder):
 
 
 def attach(tool, video_url, duration):
+    """把视频挂到工具上。
+
+    【交付物走专用端点】：客户的交付物用通用 PUT 会有两个坑——
+    PUT 是整体覆盖语义（少传字段就清空），而且归属/可见性字段在那条路上
+    有过"改别的字段把归属抹掉"的历史。deliver 端点只动传进去的字段，
+    归属和 private 由它自己钉死。
+    """
+    if tool.get("sourceTicketId"):
+        r = _req("/api/admin/tools/deliver", method="POST",
+                 data=json.dumps({"ticketId": tool["sourceTicketId"],
+                                  "videoUrl": video_url,
+                                  "videoDuration": int(round(duration))}).encode(),
+                 headers={"Content-Type": "application/json"})
+        return json.load(r)
     payload = {k: tool.get(k) for k in _TOOL_FIELDS}
     payload["videoUrl"] = video_url
     payload["videoDuration"] = int(round(duration))
@@ -124,33 +138,47 @@ def delete_upload(rel_path):
         pass
 
 
-def verify_live(slug, video_rel):
-    """回查线上：详情接口认它、静态直链能取、支持 Range（否则拖不动进度条）。"""
+def verify_live(slug, video_rel, private=False):
+    """回查线上：详情接口认它、真能取到、支持 Range（否则拖不动进度条）。
+
+    【私有交付物走的是另一条路】：它的文件在 uploads/private/ 下，
+    静态层一律 404，详情接口给的是鉴权地址 /api/tools/{slug}/video。
+    还按静态直链去验的话，验的是一个必然 404 的地址——
+    那不叫"没通过"，那叫【验错了对象】。
+    """
     problems = []
+    want = f"/api/tools/{urllib.parse.quote(slug)}/video" if private else "/uploads/" + video_rel
     try:
-        d = json.load(urllib.request.urlopen(f"{API}/api/tools/{slug}", timeout=60))
+        d = json.load(urllib.request.urlopen(f"{API}/api/tools/{slug}", timeout=60)) \
+            if not private else json.load(_req(f"/api/tools/{slug}"))
         if not d.get("videoUrl"):
             problems.append("详情接口里 videoUrl 是空的")
-        elif urllib.parse.unquote(d["videoUrl"]) != "/uploads/" + video_rel:
+        elif urllib.parse.unquote(d["videoUrl"]) != urllib.parse.unquote(want):
             problems.append(f"详情接口里的 videoUrl 是 {d['videoUrl']}，不是刚上传的那个")
     except Exception as e:
         problems.append(f"详情接口查不到：{e}")
 
-    url = SITE + "/uploads/" + urllib.parse.quote(video_rel)
     try:
-        r = urllib.request.urlopen(urllib.request.Request(url, method="GET",
-                                                          headers={"Range": "bytes=0-1023"}),
-                                   timeout=60, context=ssl.create_default_context())
+        if private:
+            # 鉴权地址：带 admin token 取。客户侧的可见性由
+            # evolution/experiments/tool-private-visibility 那套专门验，这里只验"能播"
+            r = _req(f"/api/tools/{urllib.parse.quote(slug)}/video",
+                     headers={"Range": "bytes=0-1023"})
+        else:
+            r = urllib.request.urlopen(
+                urllib.request.Request(SITE + "/uploads/" + urllib.parse.quote(video_rel),
+                                       method="GET", headers={"Range": "bytes=0-1023"}),
+                timeout=60, context=ssl.create_default_context())
         if r.status not in (200, 206):
-            problems.append(f"视频直链返回 {r.status}")
+            problems.append(f"视频取回返回 {r.status}")
         if r.status == 200:
             problems.append("视频不支持 Range（进度条会拖不动）")
         if (r.headers.get("Content-Type") or "") != "video/mp4":
             problems.append(f"视频 Content-Type 是 {r.headers.get('Content-Type')}")
     except urllib.error.HTTPError as e:
-        problems.append(f"视频直链 HTTP {e.code}")
+        problems.append(f"视频取回 HTTP {e.code}")
     except Exception as e:
-        problems.append(f"视频直链取不到：{e}")
+        problems.append(f"视频取不到：{e}")
     return problems
 
 
@@ -163,7 +191,8 @@ def publish(tool, mp4, duration):
         delete_upload(up["path"])
         raise PublishError(f"挂载失败已撤回上传：{e}")
 
-    problems = verify_live(tool["slug"], up["path"])
+    private = (tool.get("visibility") == "private") or up["path"].startswith("private/")
+    problems = verify_live(tool["slug"], up["path"], private=private)
     if problems:
         detach(tool)
         delete_upload(up["path"])

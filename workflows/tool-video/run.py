@@ -101,11 +101,18 @@ def pick(tools, limit, slug=None):
         if not hit:
             raise SystemExit(f"❌ 没有 slug={slug} 这个工具")
         return hit
-    cand = [t for t in tools
-            if t.get("isPublished") and not (t.get("videoUrl") or "").strip()
-            and ((t.get("downloadCount") or 0) + (t.get("viewCount") or 0)) > 0]
-    cand.sort(key=lambda t: (-(t.get("downloadCount") or 0), -(t.get("viewCount") or 0)))
-    return cand[:limit]
+    no_video = [t for t in tools if t.get("isPublished") and not (t.get("videoUrl") or "").strip()]
+
+    # 【客户交付物排在最前，且不看浏览量】。它们刚上架，浏览量必然是 0，
+    # 按热度排的话永远轮不到——而它们等着这条片子才能交付、才能结单，
+    # 站方工具晚一周出片没人受影响，客户的单子卡住是要退钱的。
+    delivery = [t for t in no_video if t.get("sourceTicketId")]
+    station = [t for t in no_video
+               if not t.get("sourceTicketId")
+               and ((t.get("downloadCount") or 0) + (t.get("viewCount") or 0)) > 0]
+    station.sort(key=lambda t: (-(t.get("downloadCount") or 0), -(t.get("viewCount") or 0)))
+    delivery.sort(key=lambda t: t.get("id") or 0)      # 先来先做
+    return (delivery + station)[:limit]
 
 
 def one(tool, *, do_publish, script=None):

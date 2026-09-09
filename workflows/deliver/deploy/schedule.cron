@@ -1,0 +1,8 @@
+# runas: root
+# 交付流水线。以 root 跑是因为要读运行库（docker 卷，agent 读不到）；
+# 调模型的凭据靠 HOME=/home/agent 指过去——【凭据是同一个物理文件，绝不复制第二份】。
+#
+# 每天 04:40 跑一张单。一次只做一张是刻意的：
+# 出错影响面只有一个客户，而且灵犀有时间在下一轮之前把上一张看完。
+# 时间避开 tool-video 的自检（周日 04:00）和主任务（周一 03:20），别抢那台 2G 机器。
+40 4 * * * bash -c 'set -a; source /opt/gooday-harness/.env 2>/dev/null; set +a; HOME=/home/agent python3 /opt/gooday-harness/workflows/{{NAME}}/run.py' >> /var/log/gooday-harness/{{NAME}}.log 2>&1

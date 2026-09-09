@@ -91,9 +91,12 @@ public class DeliveryService(AppDbContext db, IWebHostEnvironment env)
         // Id 是自增主键，不会重复。
         var marker = $"[交付单#{tool.Id}]";
 
-        // 已经通知过就不再发（灵犀会反复调上架端点直到三样齐，这里必须幂等）
-        if (await db.PrivateMessages.AnyAsync(m => m.ReceiverId == uid && m.Content.Contains(marker)))
-            return false;
+        // 已经通知过就不再发（灵犀会反复调上架端点直到三样齐，这里必须幂等）。
+        // 【私信和站内通知各查各的】：只查私信的话，私信一旦被删（人工清理、
+        // 客户自己删），下一次调用就会再插一条通知——实测留下过两条重复通知。
+        var msgSent = await db.PrivateMessages.AnyAsync(m => m.ReceiverId == uid && m.Content.Contains(marker));
+        var noteSent = await db.Notifications.AnyAsync(n => n.UserId == uid && n.LinkUrl == link);
+        if (msgSent || noteSent) return false;
 
         var ruyi = await db.Users.FirstOrDefaultAsync(u => u.Username == "如意");
         var me = await db.Users.FirstOrDefaultAsync(u => u.Id == uid);
