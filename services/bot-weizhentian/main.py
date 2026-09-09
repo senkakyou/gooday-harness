@@ -25,6 +25,19 @@ NAME = "bot-weizhentian"
 class DevBot(Bot):
     """开发 bot 的输入是工单，不是私信。"""
 
+    def history(self, sender_id, exclude_ids=()):
+        """【不要会话历史】。
+
+        runner 默认会把"和发信人之前聊过的话"附进上下文——那是给对话式角色用的
+        （如意接客户、灵犀答站长）。而这里的"发信人"是调度中心：
+        unread() 把工单伪装成来自它的消息，真去拉历史只会把不相干的调度往来
+        塞进开发上下文，既费 token 又干扰判断。
+
+        写成覆盖方法而不是改 config，是因为 config.json 归 root 所有、
+        本身也不该为了一个只对本角色成立的事实去动公共配置。
+        """
+        return ""
+
     def unread(self):
         """取待开发工单。
 

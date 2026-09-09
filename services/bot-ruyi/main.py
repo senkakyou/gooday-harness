@@ -52,13 +52,72 @@ class FrontDeskBot(Bot):
                                api_base=self.cfg.get("api_base"))
 
 
-def client_context(cfg):
+def client_context(cfg, sender_id=None):
     """查这个客户已有的记录，好让如意一开口就知道对方提过什么。
 
     只查【该客户自己的】数据——绝不把别人的信息带进上下文。
+
+    ═══ 这个函数曾经是空的（2026-09-09 修）═══════════════════════
+
+    函数名和上面这段注释都写着"查客户已有的记录"，而函数体里
+    **一句查询都没有**，只返回一段固定纪律。更要命的是 prompt.md 里写着
+    「系统会在每次对话里附上该客户的需求订单、客户档案、工单进度，
+    开口前先看，别把客户已经说过的再问一遍」——
+    **提示词承诺了一份资料，代码从来没附过。**
+
+    结果就是何萍那次接待：她把需求说得很清楚，如意隔一轮就重新自我介绍、
+    把同样三个问题再问一遍，最后回她"我这会儿手头没看到你之前发的需求内容"。
+
+    教训：名字和注释不是实现。看函数体，不看函数名。
+    ═══════════════════════════════════════════════════════════
     """
-    return ("【回复纪律】你不做技术判断、不承诺工期报价、不透露内部结构。"
+    base = ("【回复纪律】你不做技术判断、不承诺工期报价、不透露内部结构。"
             "拿不准的一律说「我记下来，团队确认后回你」。")
+    if not sender_id:
+        return base
+
+    conn = sqlite3.connect(cfg["db"], timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        who = conn.execute("SELECT Username FROM Users WHERE Id=?", (sender_id,)).fetchone()
+        reqs = conn.execute(
+            "SELECT Title, Description, Budget, Status, CreatedAt FROM DevRequests "
+            "WHERE UserId=? ORDER BY Id DESC LIMIT 3", (sender_id,)).fetchall()
+        tks = conn.execute(
+            "SELECT TicketNo, Title, Status, EstimatedPrice FROM Tickets "
+            "WHERE ClientId=? ORDER BY Id DESC LIMIT 5", (sender_id,)).fetchall()
+        cli = conn.execute(
+            "SELECT Contact, ContactType, Budget, PreferredContact FROM Clients "
+            "WHERE UserId=? ORDER BY Id DESC LIMIT 1", (sender_id,)).fetchone()
+    except Exception as e:
+        # 查不到不能阻断接待——但要说明"这次没查到"，
+        # 不能让模型以为"这个客户什么记录都没有"
+        return base + f"\n【注意】这次没能查到该客户的历史记录（{type(e).__name__}），" \
+                      f"别据此断定他没提过需求。"
+    finally:
+        conn.close()
+
+    lines = [base, f"\n【客户资料 · {who['Username'] if who else sender_id}】"]
+    if cli:
+        lines.append(f"联系方式：{cli['ContactType']} {cli['Contact']}；"
+                     f"预算记录：{cli['Budget'] or '未记'}")
+    else:
+        lines.append("客户档案：还没建")
+    if reqs:
+        lines.append("他提过的需求：")
+        for r in reqs:
+            d = " ".join((r["Description"] or "").split())[:200]
+            lines.append(f"  · [{r['Status']}] {r['Title']}"
+                         f"（预算 {r['Budget'] or '未填'}）{d}")
+    else:
+        lines.append("他还没有正式登记过需求单。")
+    if tks:
+        lines.append("他的工单：")
+        for t in tks:
+            lines.append(f"  · {t['TicketNo']} {t['Title']} → {t['Status']}"
+                         f"（报价 {t['EstimatedPrice'] or '未报'}）")
+    lines.append("**以上是他已经告诉过我们的，别再问一遍。**")
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":
