@@ -47,7 +47,11 @@ public class Tool
     // 【不设 Owner 导航属性】：SQLite 给已有表加外键要整表重建，为一个约束
     // 重建生产表不划算。这里只存 Id，要用户信息时按 Id 查。
     public int? OwnerUserId { get; set; }
-    public string Visibility { get; set; } = "public";   // public | private
+    // 【实体默认值是 private，方向是刻意的】：忘了设的时候必须是"不给看"，
+    // 不是"给所有人看"。新建站方工具时由 NormalizeOwnership 显式写成 public。
+    // （数据库迁移的 defaultValue 仍是 public——那是给现存 103 个站方工具做 backfill 的，
+    //   默认 private 会让整个工具库在迁移那一刻从首页消失，且不报错。两者方向不同、各有其理。）
+    public string Visibility { get; set; } = "private";  // public | private
 
     // 这个交付物是哪张工单来的。工单结单闸门查它——
     // 比原来"客户私信里出现过 deliverables 这个词"可靠得多

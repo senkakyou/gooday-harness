@@ -19,21 +19,12 @@ namespace GoodayTools.Controllers;
 public class ToolsController(AppDbContext db, IWebHostEnvironment env, SubscriptionService sub) : ControllerBase
 {
     // 当前请求者的用户 Id（没登录返回 null）
-    private int? MeOrNull()
-        => int.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var id) ? id : null;
+    private int? MeOrNull() => User.UserIdOrNull();
 
-    // 【可见性判定只有这一处】。列表、详情、下载、在线运行、视频、分类计数
-    // 全部走它——判定散在各处，迟早有一处漏掉，而漏掉的表现是
-    // 「本该只有客户看到的交付物挂在首页上」，这种错误没有报警会一直存在。
-    //
-    //   站方工具（OwnerUserId 为 null）→ 一律公开
-    //   客户交付物 → Visibility=public 时公开；private 时只有本人和站长看得到
-    private IQueryable<Tool> Visible(IQueryable<Tool> q)
-    {
-        var me = MeOrNull();
-        if (User.IsInRole("admin")) return q;                    // 站长看全部，否则没法排查
-        return q.Where(t => t.Visibility == "public" || (me != null && t.OwnerUserId == me));
-    }
+    // 可见性判定在 Services/ToolVisibility.cs，【全站唯一一份】。
+    // 任何按 id/slug 回读工具的地方都必须过它——收藏接口就是因为绕过去，
+    // 把全站私有交付物的名字漏了出去（2026-09-09 灵犀评审第 2 条）。
+    private IQueryable<Tool> Visible(IQueryable<Tool> q) => q.VisibleTo(User);
 
     // GET /api/tools?category=效率工具
     // 返回已发布工具列表，可按分类筛选。
@@ -227,6 +218,11 @@ public class ToolsController(AppDbContext db, IWebHostEnvironment env, Subscript
             .FirstOrDefaultAsync(t => t.Slug == slug);
         if (tool == null) return NotFound();
 
+        // 【这里不再查 RequireLogin / IsPaid】，两个理由：
+        //   · private 工具的"谁能看"已经由上面的可见性判定管住了（必须是本人或站长）；
+        //   · public 工具的在线版和讲解，全站口径本来就是直接打开——站方公开工具
+        //     的 html 就是静态直出的，付费墙一直只挡下载。
+        // 加了反而制造出"我把它公开了，别人却打不开"这种自相矛盾（实测踩到）。
         var raw = kind == "video" ? tool.VideoUrl : tool.OnlineUrl;
         if (string.IsNullOrEmpty(raw)) return NotFound();
         if (raw.StartsWith("http://", StringComparison.OrdinalIgnoreCase)

@@ -164,8 +164,31 @@ using (var scope = app.Services.CreateScope()) {
 
 // ---- 中间件管道（请求从上到下依次经过） ----
 // qianky 私有页：禁止静态直链访问 HTML 文件，强制走下方鉴权路由 /qianky
+// ---- 路径归一：先把重复斜杠塌掉，再让后面所有判断生效 ----
+// 【2026-09-09 实测的真漏】：`//uploads/private/x.txt` 能拿到 200，
+// 而 `/uploads/private/x.txt` 是 404。原因是 StartsWithSegments 对 `//uploads`
+// 返回 false，而静态文件提供程序会把前导斜杠 TrimStart 掉照样找到文件——
+// 一道拦截、一个提供程序，对"同一个路径"的理解不一样，中间那条缝就是洞。
+// nginx 的 merge_slashes 没有兜住（实测线上同样 200）。
+// 塌斜杠放在最前面：后面每一处路径判断从此只需要考虑一种写法。
 app.Use(async (ctx, next) => {
-    if (ctx.Request.Path.Equals("/uploads/food-safety-check.html", StringComparison.OrdinalIgnoreCase)) {
+    var p = ctx.Request.Path.Value ?? "";
+    if (p.Contains("//")) {
+        var segs = p.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        ctx.Request.Path = "/" + string.Join('/', segs) + (p.EndsWith('/') && segs.Length > 0 ? "/" : "");
+    }
+    await next();
+});
+
+app.Use(async (ctx, next) => {
+    // 按【段】判断，不按前缀字符串——前缀匹配对 `//uploads`、`/uploads//private`
+    // 这类写法会漏，而它们指向同一个文件
+    var segs = (ctx.Request.Path.Value ?? "").Split('/', StringSplitOptions.RemoveEmptyEntries);
+    bool Seg(int i, string v) => segs.Length > i
+        && string.Equals(segs[i], v, StringComparison.OrdinalIgnoreCase);
+
+    // qianky 私有页：禁止静态直链访问，强制走下方鉴权路由 /qianky
+    if (segs.Length == 2 && Seg(0, "uploads") && Seg(1, "food-safety-check.html")) {
         ctx.Response.StatusCode = 404;
         return;
     }
@@ -173,7 +196,7 @@ app.Use(async (ctx, next) => {
     // 【这是"私有"两个字的全部依据】——文件放在静态目录下，不拦就是公开的，
     // 只是没人知道路径而已；而路径会出现在浏览器历史、日志、转发的链接里。
     // 唯一的取文件入口是 /api/tools/{slug}/online|video|download，那里查归属。
-    if (ctx.Request.Path.StartsWithSegments("/uploads/private", StringComparison.OrdinalIgnoreCase)) {
+    if (Seg(0, "uploads") && Seg(1, "private")) {
         ctx.Response.StatusCode = 404;
         return;
     }

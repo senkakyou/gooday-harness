@@ -119,16 +119,64 @@ def main():
     st, bb, h = req(f"/api/tools/{SLUG}/video", None, headers={"Range": "bytes=0-99"})
     allok &= show(f"匿名按它取视频 → {st}（要 206）", st == 206)
 
+    # 【下面几节必须在私有态下验】。第一版把它们排在公开之后，
+    # 结果"另一用户能收藏"「匿名看得到」全是对的行为，却被记成失败——
+    # 测试的状态没摆对，读到的结论就是假的
+    st, _, _ = req(f"/api/tools/{SLUG}/visibility", TOK["所有者"], "PUT", {"visibility": "private"})
+    allok &= show(f"改回私有（后续用例的前提）→ {st}", st == 200)
+
+    print("=== 收藏接口（第一版漏掉的侧信道）===")
+    # 别人收藏我的私有工具 → 必须当作不存在；否则收藏页会把名字和简介吐出去
+    tid = json.loads(req(f"/api/tools/{SLUG}", TOK["所有者"])[1])["id"]
+    st, _, _ = req(f"/api/favorites/{tid}", TOK["另一用户"], "POST")
+    allok &= show(f"另一用户收藏我的私有工具 → {st}（要 404）", st == 404)
+    st, b, _ = req("/api/favorites", TOK["另一用户"])
+    names = [x["name"] for x in json.loads(b)] if st == 200 else []
+    allok &= show(f"另一用户的收藏页里没有它（{len(names)} 条）", SLUG not in json.dumps(names, ensure_ascii=False))
+    # 所有者自己收藏得动
+    st, _, _ = req(f"/api/favorites/{tid}", TOK["所有者"], "POST")
+    allok &= show(f"所有者收藏自己的 → {st}", st == 200)
+    st, b, _ = req("/api/favorites", TOK["所有者"])
+    allok &= show("所有者的收藏页里有它", "私有交付物自检" in b.decode("utf-8", "ignore"))
+    req(f"/api/favorites/{tid}", TOK["所有者"], "POST")   # 取消收藏，别留状态
+
+    print("=== 静态直链的变体写法（双斜杠是实测过的真漏）===")
+    raw = "/uploads/private/GD-TEST-0909-abc123/交付包.zip"
+    for label, path in [
+        ("双斜杠 //uploads/…", "/" + urllib.parse.quote(raw)),
+        ("中段双斜杠 /uploads//private/…", urllib.parse.quote(raw.replace("/private", "//private"))),
+        ("大写 /UPLOADS/PRIVATE/…", urllib.parse.quote(raw.replace("/uploads/private", "/UPLOADS/PRIVATE"))),
+        ("上跳 /uploads/x/../private/…", urllib.parse.quote(raw.replace("/uploads/", "/uploads/x/../"))),
+    ]:
+        st, body, _ = req(path)
+        leaked = b"test payload" in body
+        allok &= show(f"{label} → {st}{'（内容漏了！）' if leaked else ''}", st == 404 and not leaked)
+
+    print("=== 后台改别的字段，不能把归属抹掉 ===")
+    # 站长在后台点「上架/下架」时，前端 toBody() 带的是这些字段——
+    # 【唯独不带 owner/visibility/sourceTicketId】。无条件覆写的话，
+    # 客户的私有交付物会当场变成站方公开工具挂上首页。
+    # 这里的 body 要照抄 services/web/src/pages/admin/Tools.jsx 的 toBody()，
+    # 少带一个字段就变成"测的是另一件事"（第一版少带 videoUrl，把视频字段清了）
+    admin_tool = json.loads(req(f"/api/tools/{SLUG}", TOK["站长"])[1])
+    body = {"name": admin_tool["name"], "slug": SLUG, "description": admin_tool["description"],
+            "category": admin_tool["category"], "iconEmoji": admin_tool["iconEmoji"],
+            "isOnline": True, "onlineUrl": "/uploads/private/GD-TEST-0909-abc123/交付物.html",
+            "hasDownload": True, "downloadFileName": "private/GD-TEST-0909-abc123/交付包.zip",
+            "isPublished": True, "requireLogin": True, "isPaid": False, "price": 0,
+            "videoUrl": "/uploads/private/GD-TEST-0909-abc123/讲解.mp4", "videoDuration": 48,
+            "folder": "private/GD-TEST-0909-abc123"}
+    st, _, _ = req(f"/api/admin/tools/{admin_tool['id']}", TOK["站长"], "PUT", body)
+    listed, _ = in_list(None)
+    allok &= show(f"后台改字段（不带归属）→ {st}，改完匿名仍看不到", st == 200 and not listed)
+
     print("=== 别人改不动我的可见性 ===")
-    st, _, _ = req(f"/api/tools/{SLUG}/visibility", TOK["另一用户"], "PUT", {"visibility": "private"})
-    allok &= show(f"另一用户试图改 → {st}（要 404）", st == 404)
+    st, _, _ = req(f"/api/tools/{SLUG}/visibility", TOK["另一用户"], "PUT", {"visibility": "public"})
+    allok &= show(f"另一用户试图把它改成公开 → {st}（要 404）", st == 404)
     st, _, _ = req("/api/tools/pinyin-learn/visibility", TOK["所有者"], "PUT", {"visibility": "private"})
     allok &= show(f"客户试图改站方工具 → {st}（要 404）", st == 404)
-
-    st, b, _ = req(f"/api/tools/{SLUG}/visibility", TOK["所有者"], "PUT", {"visibility": "private"})
-    allok &= show(f"改回私有 → {st}", st == 200)
     listed, _ = in_list(None)
-    allok &= show("匿名又看不到了", not listed)
+    allok &= show("最终仍是私有：匿名看不到", not listed)
 
     print("\n判定:", "✅ 全部通过" if allok else "❌ 有不通过项")
     sys.exit(0 if allok else 1)

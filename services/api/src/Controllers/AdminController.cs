@@ -112,8 +112,16 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         if (NormalizeRelDir(dto.Folder, out var folder) is string ferr) return BadRequest(new { message=ferr });
         tool.VideoUrl=vurl; tool.VideoSource=vsrc;
         tool.VideoDuration=Math.Max(0,dto.VideoDuration); tool.Folder=folder;
-        var (owner, vis) = NormalizeOwnership(dto.OwnerUserId, dto.Visibility);
-        tool.OwnerUserId = owner; tool.Visibility = vis; tool.SourceTicketId = dto.SourceTicketId;
+        // 【归属只在显式传了才动】。DTO 里这三个字段是可选的，而后台前端的
+        // toBody()/openEdit() 根本不带它们——无条件覆写的后果是：
+        // 站长在后台点一下「上架」，客户的私有交付物当场被抹掉归属、变成站方公开工具，
+        // 挂到首页上，而且不报错、没日志。（2026-09-09 灵犀评审第 1 条，上线后当天发现）
+        if (dto.OwnerUserId is not null || dto.Visibility is not null) {
+            var (owner, vis) = NormalizeOwnership(dto.OwnerUserId, dto.Visibility);
+            tool.OwnerUserId = owner;
+            tool.Visibility = vis;
+        }
+        if (dto.SourceTicketId is not null) tool.SourceTicketId = dto.SourceTicketId;
         tool.UpdatedAt=DateTime.UtcNow;
         await db.SaveChangesAsync();
         return Ok(tool);

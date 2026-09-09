@@ -11,6 +11,7 @@ using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 using GoodayTools.Data;
 using GoodayTools.Models;
+using GoodayTools.Services;
 namespace GoodayTools.Controllers;
 
 [ApiController]
@@ -25,9 +26,13 @@ public class FavoritesController(AppDbContext db) : ControllerBase
     public async Task<IActionResult> List()
     {
         var myId = MyId;
+        // 【必须过可见性】：不过滤的话，别人的私有交付物只要被收藏过一次
+        // （或被人遍历 id 收藏），名字和简介就会从这里吐出去。
+        // 还有一条非恶意路径：客户公开 → 别人收藏 → 客户改回私有，
+        // 不过滤的话它在别人的收藏页里永远还在。
         var items = await db.ToolFavorites
             .Where(f => f.UserId == myId)
-            .Join(db.Tools.Where(t => t.IsPublished),
+            .Join(db.Tools.Where(t => t.IsPublished).VisibleTo(User),
                   f => f.ToolId, t => t.Id,
                   (f, t) => new {
                       t.Id, t.Name, t.Slug, t.Description, t.Category,
@@ -55,7 +60,9 @@ public class FavoritesController(AppDbContext db) : ControllerBase
     public async Task<IActionResult> Toggle(int toolId)
     {
         var myId = MyId;
-        if (!await db.Tools.AnyAsync(t => t.Id == toolId && t.IsPublished))
+        // 同样过可见性：不然任何登录用户遍历 id 收藏一遍，就能拿到全站私有工具的清单。
+        // 不可见时报「工具不存在」而不是「无权限」——后者等于确认这个 id 存在
+        if (!await db.Tools.Where(t => t.IsPublished).VisibleTo(User).AnyAsync(t => t.Id == toolId))
             return NotFound(new { message = "工具不存在" });
 
         var fav = await db.ToolFavorites.FirstOrDefaultAsync(f => f.UserId == myId && f.ToolId == toolId);
