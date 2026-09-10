@@ -128,6 +128,32 @@ def main():
     show("私信里带着需求原文（不是摘要）", NEED[:20] in body)
     show("私信里【没有】价格字样", not any(w in body for w in ("预算", "报价", "¥")))
 
+    print("=== 3.5 建单必须关联客户档案（否则这张单永远交付不了）===")
+    # 这一条是补的：第一版 intake.py 恒传 clientId=None，
+    # 单子建得出来、通知也发得出去，**但走到放行那一步会被上架端点拒绝**——
+    # 一个只在链路末端才暴露的洞。没有判据盯着，它能一直躺着。
+    st, r2 = req("/api/tickets", owner_tok, "POST", {
+        "title": "带账号的客户下的单", "description": NEED,
+        "clientName": "e2e有账号客户", "clientContact": "wechat e2e_test2",
+        "clientId": None, "clientUserId": 7})
+    tid2 = r2.get("id")
+    if tid2:
+        made.append(tid2)
+    _, d2 = req(f"/api/tickets/{tid2}", owner_tok)
+    show("带 clientUserId 建单 → ClientId 非空", d2.get("clientId") is not None,
+         f"clientId={d2.get('clientId')}")
+    show("换算回去就是那个账号", d2.get("clientUserId") == 7, f"clientUserId={d2.get('clientUserId')}")
+    n_cli = sql("SELECT COUNT(*) FROM Clients WHERE UserId=7")
+    show("客户档案被自动建出来了", n_cli == "1", f"Clients(UserId=7)={n_cli}")
+    st, r3 = req("/api/tickets", owner_tok, "POST", {
+        "title": "同一个人的第二单", "description": NEED,
+        "clientName": "e2e有账号客户", "clientContact": "wechat e2e_test2",
+        "clientId": None, "clientUserId": 7})
+    if r3.get("id"):
+        made.append(r3["id"])
+    n_cli2 = sql("SELECT COUNT(*) FROM Clients WHERE UserId=7")
+    show("同一个人再下单不会重复建档案", n_cli2 == "1", f"Clients(UserId=7)={n_cli2}")
+
     print("=== 4. 开工闸：只有大海能推 ===")
     st, r = req(f"/api/tickets/{tid}/transition", ruyi_tok, "POST", {"event": "start"})
     show("如意（staff）推 start → 403", st == 403, f"HTTP {st} {r.get('message', '')}")
@@ -204,8 +230,12 @@ def main():
     for i in made:
         st, _ = req(f"/api/tickets/{i}", owner_tok, "DELETE")
         show(f"删掉测试订单 #{i}", st == 200)
-    left = sql("SELECT COUNT(*) FROM Tickets WHERE ClientContact='wechat e2e_test'")
-    show("库里没留下测试数据", left == "0", f"残留 {left}")
+    left = sql("SELECT COUNT(*) FROM Tickets WHERE ClientContact LIKE 'wechat e2e_test%'")
+    show("库里没留下测试订单", left == "0", f"残留 {left}")
+    subprocess.run(["sudo", "-n", "sqlite3", DB,
+                    "DELETE FROM Clients WHERE Contact LIKE 'wechat e2e_test%'"], timeout=30)
+    left_c = sql("SELECT COUNT(*) FROM Clients WHERE Contact LIKE 'wechat e2e_test%'")
+    show("库里没留下测试客户档案", left_c == "0", f"残留 {left_c}")
     shutil.rmtree(_TMPDIR, ignore_errors=True)
     show("临时 token 库已清理", not os.path.exists(SCRATCH))
 

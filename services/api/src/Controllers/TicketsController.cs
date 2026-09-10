@@ -104,6 +104,37 @@ public class TicketsController(AppDbContext db, DeliveryService delivery,
         });
     }
 
+    /// <summary>
+    /// 拿 UserId 换客户档案 Id；没有就建一个。返回 null 表示这人没账号（线下客户）。
+    ///
+    /// 【建档案这件事跟建单绑在一起，不单独暴露成一个接口】：
+    /// 客户档案的存在意义就是「这个人跟我们做过生意」，
+    /// 而「做生意」的起点就是开单。分成两步就会出现有单没档案、
+    /// 或者一堆从没下过单的空档案。
+    /// </summary>
+    private async Task<int?> ResolveClientAsync(int? userId, string? name, string? contact)
+    {
+        if (userId is not int uid || uid <= 0) return null;
+
+        var existing = await db.Clients.Where(c => c.UserId == uid)
+                                       .Select(c => (int?)c.Id).FirstOrDefaultAsync();
+        if (existing != null) return existing;
+
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Id == uid);
+        if (user == null) return null;          // 账号不存在就别硬建档案
+
+        var c2 = new Client {
+            UserId = uid,
+            Name = string.IsNullOrWhiteSpace(name) ? user.Username : name.Trim(),
+            Contact = contact?.Trim() ?? "",
+            Source = "ruyi",
+            Status = "prospect",
+        };
+        db.Clients.Add(c2);
+        await db.SaveChangesAsync();
+        return c2.Id;
+    }
+
     // ══ 建单 ═══════════════════════════════════════════════════════
 
     /// 网页公开需求表单提交的字段。【没有预算/金额字段】——如意与前台全程不谈钱。
@@ -134,9 +165,8 @@ public class TicketsController(AppDbContext db, DeliveryService delivery,
             Description   = req.Description.Trim(),
             ClientName    = req.Name.Trim(),
             ClientContact = req.Contact.Trim(),
-            ClientId      = userId == null ? null
-                            : await db.Clients.Where(c => c.UserId == userId)
-                                      .Select(c => (int?)c.Id).FirstOrDefaultAsync(),
+            // 登录用户同样要关联/建立客户档案，理由同 ResolveClientAsync
+            ClientId      = await ResolveClientAsync(userId, req.Name, req.Contact),
             Status        = TicketWorkflow.New,
             Amount        = null,        // 钱由大海与客户确认后填
         };
@@ -179,9 +209,12 @@ public class TicketsController(AppDbContext db, DeliveryService delivery,
     }
 
     /// 内部建单（如意 intake.py / 大海手建）。同样没有金额字段。
+    ///
+    /// ClientUserId：如意是在【站内私信】里接待的，对方必然有账号，
+    /// 她把发信人的 UserId 带上，服务端负责换算成客户档案（没有就建一个）。
     public record CreateTicketReq(
         string Title, string Description,
-        string ClientName, string ClientContact, int? ClientId);
+        string ClientName, string ClientContact, int? ClientId, int? ClientUserId);
 
     // ---- POST /api/tickets —— 内部建单 ----
     [HttpPost]
@@ -192,13 +225,20 @@ public class TicketsController(AppDbContext db, DeliveryService delivery,
         if (string.IsNullOrWhiteSpace(req.Description))
             return BadRequest(new { message = "需求描述不能为空" });
 
+        // 【必须关联客户档案，否则这张单永远交付不了】。
+        // 上架端点要把交付物挂到 Clients → Users 名下，ClientId 为空时它直接拒绝。
+        // 第一版 intake.py 恒传 null，结果是如意开的单全部走不到放行那一步——
+        // 而这个信息本来就在手上（她在站内私信里接待，发信人必然有账号）。
+        var clientId = req.ClientId ?? await ResolveClientAsync(
+            req.ClientUserId, req.ClientName, req.ClientContact);
+
         var t = new Ticket {
             TicketNo      = await GenerateTicketNo(),
             Title         = req.Title.Trim(),
             Description   = req.Description.Trim(),
             ClientName    = req.ClientName?.Trim() ?? "",
             ClientContact = req.ClientContact?.Trim() ?? "",
-            ClientId      = req.ClientId,
+            ClientId      = clientId,
             Status        = TicketWorkflow.New,
         };
         db.Tickets.Add(t);

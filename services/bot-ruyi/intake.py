@@ -108,7 +108,7 @@ def _recent(conn, since_ts):
         "SELECT COUNT(*) FROM Tickets WHERE CreatedAt >= ?", (since_ts,)).fetchone()[0]
 
 
-def check_quota_and_dup(db, d, sender_id):
+def check_quota_and_dup(db, d):
     """防灌 + 24 小时幂等。
 
     【幂等按「客户 + 标题」指纹，不按订单号】：如意每轮都可能把同一段
@@ -136,15 +136,19 @@ def check_quota_and_dup(db, d, sender_id):
         conn.close()
 
 
-def create_ticket(cfg, d):
+def create_ticket(cfg, d, sender_id):
     """走 API 建单。【不直接写库】——建单要连带通知大海、写工作记录，
     那些逻辑在服务端，绕过 API 就会各写一份。"""
     token = auth.provider(cfg["bot_id"], cfg.get("username", "如意"),
                           cfg.get("role", "staff"), cfg["db"])()
+    # 【必须带上 clientUserId】。如意是在站内私信里接待的，发信人必然有账号，
+    # 服务端拿它换/建客户档案。第一版恒传 clientId=None，后果是这张单
+    # **永远走不到放行那一步**——上架端点要把交付物挂到具体用户名下，
+    # 没有客户档案它直接拒绝。而这个信息本来就在手上，只是没传。
     body = json.dumps({
         "title": d["title"], "description": d["need"],
         "clientName": d["client"], "clientContact": d["contact"],
-        "clientId": None,
+        "clientId": None, "clientUserId": sender_id,
     }).encode()
     req = urllib.request.Request(
         cfg.get("api_base", "https://localhost") + "/api/tickets",
@@ -162,8 +166,8 @@ def on_reply(bot, sender_id, batch, text, task):
         if not d:
             return
         validate(d)
-        check_quota_and_dup(bot.cfg["db"], d, sender_id)
-        r = create_ticket(bot.cfg, d)
+        check_quota_and_dup(bot.cfg["db"], d)
+        r = create_ticket(bot.cfg, d, sender_id)
         bot.log(f"✅ 开单 {r.get('ticketNo')}（客户 {d['client']} / {d['contact']}）")
         if task:
             task.event("ticket_created", "P2",
