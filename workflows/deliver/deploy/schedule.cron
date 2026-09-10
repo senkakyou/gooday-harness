@@ -5,4 +5,8 @@
 # 每天 04:40 跑一张单。一次只做一张是刻意的：
 # 出错影响面只有一个客户，而且灵犀有时间在下一轮之前把上一张看完。
 # 时间避开 tool-video 的自检（周日 04:00）和主任务（周一 03:20），别抢那台 2G 机器。
-40 4 * * * bash -c 'set -a; source /opt/gooday-harness/.env 2>/dev/null; set +a; HOME=/home/agent python3 /opt/gooday-harness/workflows/{{NAME}}/run.py' >> /var/log/gooday-harness/{{NAME}}.log 2>&1
+# [停用于 2026-09-10 · 订单主链路 v2 · docs/decisions/006]
+# 本流程正在改造为 workflows/order 的四条显式命令，开工由大海下令而不是定时轮询。
+# 迁移期间必须先停：04:40 这一跑会读 services/bot-weizhentian/prompt.md，
+# 而那个文件即将被移走；且它按 status='delivering' 选题，而该状态即将不存在。
+# 40 4 * * * bash -c 'set -a; source /opt/gooday-harness/.env 2>/dev/null; set +a; HOME=/home/agent python3 /opt/gooday-harness/workflows/{{NAME}}/run.py' >> /var/log/gooday-harness/{{NAME}}.log 2>&1

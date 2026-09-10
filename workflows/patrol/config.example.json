@@ -11,26 +11,6 @@
       "unit": "gooday-harness-bot-ruyi",
       "heartbeat": "/var/lib/gooday-harness/state/bot-ruyi/heartbeat",
       "max_silent_min": 10
-    },
-    {
-      "unit": "gooday-harness-bot-qingtianzu",
-      "heartbeat": "/var/lib/gooday-harness/state/bot-qingtianzu/heartbeat",
-      "max_silent_min": 20
-    },
-    {
-      "unit": "gooday-harness-bot-weizhentian",
-      "heartbeat": "/var/lib/gooday-harness/state/bot-weizhentian/heartbeat",
-      "max_silent_min": 35
-    },
-    {
-      "unit": "gooday-harness-bot-zhaocai",
-      "heartbeat": "/var/lib/gooday-harness/state/bot-zhaocai/heartbeat",
-      "max_silent_min": 10
-    },
-    {
-      "unit": "gooday-harness-dispatcher",
-      "heartbeat": "/var/lib/gooday-harness/state/dispatcher/heartbeat",
-      "max_silent_min": 10
     }
   ],
   "_services": "旧 gooday-* 已于 2026-09-07 停用并 disable，巡检目标改指新架构。max_silent_min 建议=正常单轮耗时×3。",
@@ -132,34 +112,6 @@
         "deps": [
           "packages/botkit",
           "services/bot-ruyi"
-        ]
-      },
-      {
-        "unit": "gooday-harness-bot-qingtianzu",
-        "deps": [
-          "packages/botkit",
-          "services/bot-qingtianzu"
-        ]
-      },
-      {
-        "unit": "gooday-harness-bot-weizhentian",
-        "deps": [
-          "packages/botkit",
-          "services/bot-weizhentian"
-        ]
-      },
-      {
-        "unit": "gooday-harness-bot-zhaocai",
-        "deps": [
-          "packages/botkit",
-          "services/bot-zhaocai"
-        ]
-      },
-      {
-        "unit": "gooday-harness-dispatcher",
-        "deps": [
-          "packages/botkit",
-          "services/dispatcher"
         ]
       },
       {

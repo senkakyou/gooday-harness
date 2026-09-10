@@ -1,4 +1,8 @@
 # runas: root
 # COO 业务巡检，每 5 分钟。错开 patrol（2-59/5）跑在 :00,:05... 避免同时争数据库。
 # 只查工单流业务；基础设施（服务/心跳/快照/库健康/证书/凭据）由 workflows/patrol 负责。
-0-59/5 * * * * bash -c 'set -a; source /opt/gooday-harness/.env 2>/dev/null; set +a; python3 /opt/gooday-harness/workflows/{{NAME}}/run.py' >> /var/log/gooday-harness/{{NAME}}.log 2>&1
+# [停用于 2026-09-10 · 订单主链路 v2 · docs/decisions/006]
+# 本流程并入 workflows/patrol 后整个删除。它的 8 项检查里有 5 项是「工单卡在某状态」
+# 的看门狗，而 v2 没有自动流转，也就没有「卡住」这回事；另外它还会去重启
+# 擎天柱/威震天/招财——那三个服务已经停了，再跑只会刷失败告警。
+# 0-59/5 * * * * bash -c 'set -a; source /opt/gooday-harness/.env 2>/dev/null; set +a; python3 /opt/gooday-harness/workflows/{{NAME}}/run.py' >> /var/log/gooday-harness/{{NAME}}.log 2>&1
