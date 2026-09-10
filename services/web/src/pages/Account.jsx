@@ -11,13 +11,11 @@ import useAuthStore from '../store/authStore'
 import ProfileTab from './account/ProfileTab'
 import PwdTab from './account/PwdTab'
 import PurchasesTab from './account/PurchasesTab'
-import RequestsTab from './account/RequestsTab'
 
 const TABS = [
   { key: 'profile',  label: '个人资料' },
   { key: 'pwd',      label: '修改密码' },
   { key: 'purchase', label: '我的购买' },
-  { key: 'request',  label: '我的需求' },
 ]
 
 export default function Account() {
@@ -89,7 +87,6 @@ export default function Account() {
       {tab === 'profile'  && <ProfileTab />}
       {tab === 'pwd'      && <PwdTab />}
       {tab === 'purchase' && <PurchasesTab />}
-      {tab === 'request'  && <RequestsTab />}
     </div>
   )
 }

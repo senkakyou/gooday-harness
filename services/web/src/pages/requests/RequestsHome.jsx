@@ -7,7 +7,7 @@
 
 import React, { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { submitRequest, uploadRequestFile } from '../../api/requests'
+import { submitIntake, uploadIntakeFile } from '../../api/tickets'
 import useToastStore from '../../store/toastStore'
 
 // ① 需求类型（可多选，含 AI 工具 / 小程序网站）
@@ -27,7 +27,6 @@ const DESC_PLACEHOLDER =
   `⭐ 其他要求（可选）  例如：支持 Windows 运行、每天自动执行、预算范围等`
 
 // ④ 预算区间（单选）
-const BUDGETS = ['不确定', '500元以下', '500-1000元', '1000-5000元', '5000元以上']
 
 const DESC_MAX = 2000
 
@@ -48,7 +47,6 @@ export default function RequestsHome() {
   const [desc, setDesc] = useState('')
   const [files, setFiles] = useState([])          // [{url,name}]
   const [uploading, setUploading] = useState(false)
-  const [budget, setBudget] = useState('不确定')
   const [contactType, setContactType] = useState('wechat')
   const [contact, setContact] = useState('')
   const [err, setErr] = useState('')
@@ -63,7 +61,7 @@ export default function RequestsHome() {
     setUploading(true)
     for (const f of arr) {
       try {
-        const data = await uploadRequestFile(f)
+        const data = await uploadIntakeFile(f)
         setFiles(prev => [...prev, { url: data.url, name: data.name || f.name }])
       } catch (e) { toast(e.message || '上传失败', true) }
     }
@@ -82,15 +80,16 @@ export default function RequestsHome() {
 
     setLoading(true)
     try {
-      await submitRequest({
+      // 【不带预算/金额】：钱由大海与客户单独确认，前台全程不谈。
+      // contactType 也不再单独传——联系方式带前缀写进 contact 一个字段，
+      // 少一列就少一处要同步的地方。
+      await submitIntake({
         name: contact,
         title: types.join('、'),
         description,
-        contactType,
-        contact,
-        budget: budget || null,
+        contact: `${contactType}: ${contact}`,
       })
-      setTypes([]); setDesc(''); setFiles([]); setBudget('不确定'); setContact('')
+      setTypes([]); setDesc(''); setFiles([]); setContact('')
       setSuccess(true)
     } catch (e) {
       setErr(e.message)
@@ -181,22 +180,10 @@ export default function RequestsHome() {
             )}
           </div>
 
-          {/* ④ 预算 */}
+          {/* ④ 联系方式 —— 原来这里有一栏「预算」，2026-09-10 删掉：
+              报价由大海和客户单独谈，表单里先问预算会把客户锚在一个数上。*/}
           <div style={card}>
-            {sectionTitle('4', '预算', '选填')}
-            <div className="req-budget">
-              {BUDGETS.map(b => (
-                <label key={b} className={`req-radio ${budget === b ? 'on' : ''}`}>
-                  <input type="radio" name="budget" checked={budget === b} onChange={() => setBudget(b)} />
-                  <span className="req-radio-dot" />{b}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {/* ⑤ 联系方式 */}
-          <div style={card}>
-            {sectionTitle('5', '联系方式')}
+            {sectionTitle('4', '联系方式')}
             <div style={{ display: 'flex', gap: 8 }}>
               <select value={contactType} onChange={e => setContactType(e.target.value)}
                 style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '9px 10px', borderRadius: 8, fontSize: 16, outline: 'none', cursor: 'pointer' }}>

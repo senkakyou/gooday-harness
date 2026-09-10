@@ -6,7 +6,7 @@
 
 import React, { useEffect, useState } from 'react'
 import { getStats, getSystem } from '../../api/admin'
-import { getRequestStats } from '../../api/requests'
+import { getTicketStats } from '../../api/tickets'
 import { getPurchaseStats } from '../../api/purchases'
 import useAuthStore from '../../store/authStore'
 
@@ -121,13 +121,13 @@ function Donut({ data }) {
 export default function Stats() {
   const user = useAuthStore(s => s.user)
   const [stats, setStats] = useState(null)
-  const [reqStats, setReqStats] = useState(null)
+  const [ticketStats, setTicketStats] = useState(null)
   const [purStats, setPurStats] = useState(null)
   const [sys, setSys] = useState(null)
 
   useEffect(() => {
     getStats().then(setStats).catch(() => {})
-    getRequestStats().then(setReqStats).catch(() => {})
+    getTicketStats().then(setTicketStats).catch(() => {})
     getPurchaseStats().then(setPurStats).catch(() => {})
     let alive = true
     const tick = () => getSystem().then(d => alive && setSys(d)).catch(() => {})
@@ -159,7 +159,8 @@ export default function Stats() {
     { icon: '📦', cls: 'ic-a', spk: 'var(--accent)', label: '工具总数', val: stats?.totalTools, sub: stats?.recentAddedTools != null ? `最近新增 ${stats.recentAddedTools}` : '', trend: tr && trendOf(tr.toolsThis, tr.toolsPrev), spark: sr.tools },
     { icon: '👤', cls: 'ic-b', spk: 'var(--accent2)', label: '注册用户', val: stats?.totalUsers, sub: tr ? `本周 +${tr.usersThis}` : '', trend: tr && trendOf(tr.usersThis, tr.usersPrev), spark: sr.users },
     { icon: '⬇️', cls: 'ic-c', spk: '#3aa0ff', label: '累计下载', val: stats?.totalDownloads, sub: stats ? `近7天 +${recent7}` : '', trend: tr && trendOf(tr.downloadsThis, tr.downloadsPrev), spark: sr.downloads },
-    { icon: '💬', cls: 'ic-d', spk: 'var(--warn)', label: '待处理需求', val: reqStats?.pending, sub: reqStats?.done != null ? `已完成 ${reqStats.done}` : '', spark: sr.requests },
+    // 「待接单」= NEW（如意开了单、等大海与客户确认细节后下开工令）
+    { icon: '💬', cls: 'ic-d', spk: 'var(--warn)', label: '待接单', val: ticketStats?.byStatus?.NEW, sub: ticketStats?.byStatus?.CLOSED != null ? `已结单 ${ticketStats.byStatus.CLOSED}` : '', spark: sr.requests },
     { icon: '💳', cls: 'ic-e', spk: '#e05299', label: '待确认购买', val: purStats?.pending, sub: '', spark: sr.purchases },
     { icon: '💰', cls: 'ic-f', spk: 'var(--green)', label: '累计收入', val: purStats ? `¥${purStats.revenue}` : null, sub: '', spark: sr.revenue },
   ]

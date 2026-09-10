@@ -17,11 +17,10 @@ const MODULES = [
 ]
 
 const AGENTS = [
-  { name: '灵犀',  label: '灵犀（COO 调度）',  note: '切换非 Claude 时将失去工具调用能力（Bash/Read 等）' },
-  { name: '擎天柱', label: '擎天柱（AI 项目经理）', note: '' },
-  { name: '威震天', label: '威震天（AI 执行者）',  note: '' },
-  { name: '如意',  label: '如意（前台接待）',   note: '' },
-  { name: '招财',  label: '招财（AI 财务）',    note: '' },
+  { name: '灵犀',  label: '灵犀（质量门禁 / 内部运维）', note: '切换非 Claude 时将失去工具调用能力（Bash/Read 等）' },
+  { name: '如意',  label: '如意（前台接待，唯一对外窗口）', note: '' },
+  // 擎天柱 / 威震天 / 招财 已于 2026-09-10 退役（docs/decisions/006）：
+  // 需求分析与开发收归主 Agent + workflows/order，财务回归人工。
 ]
 
 const MODEL_OPTIONS = [

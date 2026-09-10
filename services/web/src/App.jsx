@@ -43,7 +43,6 @@ const TeacherStudents    = lazy(() => import('./pages/teacher/TeacherStudents'))
 const TeacherStudentDetail = lazy(() => import('./pages/teacher/TeacherStudentDetail'))
 const AdminLayout        = lazy(() => import('./pages/admin/AdminLayout'))
 const Stats              = lazy(() => import('./pages/admin/Stats'))
-const Requests           = lazy(() => import('./pages/admin/Requests'))
 const Tools              = lazy(() => import('./pages/admin/Tools'))
 const Users              = lazy(() => import('./pages/admin/Users'))
 const Purchases          = lazy(() => import('./pages/admin/Purchases'))
@@ -61,10 +60,8 @@ const Announce           = lazy(() => import('./pages/admin/Announce'))
 const AdminAccessLogs    = lazy(() => import('./pages/admin/AdminAccessLogs'))
 const Tickets            = lazy(() => import('./pages/admin/Tickets'))
 const Clients            = lazy(() => import('./pages/admin/Clients'))
-const Projects           = lazy(() => import('./pages/admin/Projects'))
 const Finance            = lazy(() => import('./pages/admin/Finance'))
 const AdminSettings      = lazy(() => import('./pages/admin/Settings'))
-const AdminApprove       = lazy(() => import('./pages/admin/Approve'))
 
 // ---- 权限守卫组件 ----
 // 包在需要 admin 权限的页面外层
@@ -150,7 +147,6 @@ export default function App() {
           }
         >
           <Route index element={<Stats />} />              {/* /admin → 数据概览 */}
-          <Route path="requests" element={<Requests />} /> {/* /admin/requests → 需求管理 */}
           <Route path="tools" element={<Tools />} />       {/* /admin/tools → 工具管理 */}
           <Route path="users" element={<Users />} />       {/* /admin/users → 用户管理 */}
           <Route path="purchases" element={<Purchases />} />{/* /admin/purchases → 购买记录 */}
@@ -165,12 +161,10 @@ export default function App() {
           <Route path="teachers/:id/students/:sid" element={<AdminTeacherStudentDetail />} />
           <Route path="announce" element={<Announce />} />
           <Route path="access-logs" element={<AdminAccessLogs />} />
-          <Route path="tickets" element={<Tickets />} />      {/* /admin/tickets → 工单管理 */}
+          <Route path="tickets" element={<Tickets />} />      {/* /admin/tickets → 订单（唯一业务对象）*/}
           <Route path="clients" element={<Clients />} />      {/* /admin/clients → 客户档案 */}
-          <Route path="projects" element={<Projects />} />    {/* /admin/projects → 项目管理 */}
           <Route path="finance" element={<Finance />} />      {/* /admin/finance → 财务管理 */}
           <Route path="settings" element={<AdminSettings />} />{/* /admin/settings → 系统设置（智能体+模型） */}
-          <Route path="approve" element={<AdminApprove />} />{/* /admin/approve → 小额自动放行审批 */}
         </Route>
       </Routes>
       </Suspense>
