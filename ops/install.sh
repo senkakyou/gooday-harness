@@ -234,6 +234,19 @@ for who in "${!CRON_BY_USER[@]}"; do
     echo "    [$who] 托管块已更新，块外任务原样保留"
 done
 
+# ── 3.4 属主再对一次 ──────────────────────────────────────────────────
+# 【第 67 行那次 chown 在建目录【之前】】，而第 2/3 段又以 root 新建了
+# state/<名> 与 media/<名>。于是**每一个新成员的状态目录都是 root 属主**。
+#
+# 现存 workflow 全都靠 cron 以 root 跑，所以这个坑一直没人踩到。
+# 2026-09-10 加 workflows/order 时踩了：它【刻意没有 cron】、由主 Agent 手工跑，
+# 第一次真跑就是 PermissionError 写不进 state/order/。
+# 换句话说：这个安装脚本默认「成员都是 root 跑的」，而那个假设已经不成立了。
+if [[ "$REPO_OWNER" != root ]]; then
+    chown -R "$REPO_OWNER" /var/lib/gooday-harness /srv/gooday-harness 2>/dev/null || true
+    echo "    新建目录属主 → $REPO_OWNER"
+fi
+
 # ── 3.5 ops/docker/.env 软链 —— 让默认的 compose 命令就是对的 ──────────
 #
 # 2026-09-07 真事故：compose 里写着 `Jwt__Secret=${JWT_SECRET}`，

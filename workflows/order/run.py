@@ -37,6 +37,39 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(REPO, "packages"))
 sys.path.insert(0, os.path.join(REPO, "workflows", "tool-video"))
 
+# ══ 让本流程能被【实际会跑它的那个身份】跑起来 ══════════════════════
+#
+#   tool-video/publish.py 要求进程能直接读 docker 卷里的运行库（它以 root 跑，
+#   cron 里写死 runas: root）。而 order **刻意没有 cron**——它是主 Agent 手工跑的，
+#   agent 身份读不到那个卷。第一次真跑时 start 和 build 都当场抛
+#   PublishError，也就是说 README 里写的用法【用实际会跑它的身份跑不起来】。
+#
+#   解法不是「改成 root 跑」（那要密码，且违背这条流程的定位），
+#   而是给它一份只用来查 TokenVersion 的可读副本。
+#
+#   ⚠️ 【必须用 sqlite3 .backup，不能用 cp】。publish.py 的注释里担心的正是 cp——
+#   WAL 模式下 cp 主文件拿到的是缺最近写入的半份且不报错（本次重构的回滚演练
+#   实测复现过，连表都可能不在）。.backup 走的是在线备份 API，是一致快照，
+#   而且它在 sudoers 的免密名单里。
+import atexit                                                     # noqa: E402
+import shutil                                                     # noqa: E402
+import tempfile                                                   # noqa: E402
+
+_RUNTIME_DB = "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db"
+if not os.access(_RUNTIME_DB, os.R_OK) and not os.environ.get("TOOLVIDEO_DB"):
+    _d = tempfile.mkdtemp(prefix="order-db-")
+    _copy = os.path.join(_d, "runtime.db")
+    try:
+        subprocess.run(["sudo", "-n", "sqlite3", _RUNTIME_DB, f".backup '{_copy}'"],
+                       check=True, timeout=120, capture_output=True)
+        os.environ["TOOLVIDEO_DB"] = _copy
+        atexit.register(shutil.rmtree, _d, ignore_errors=True)
+    except Exception as _e:
+        shutil.rmtree(_d, ignore_errors=True)
+        print(f"[order] ❌ 读不到运行库，且备份副本也没做成：{_e}\n"
+              f"        本流程要能查 TokenVersion 才签得出 token。", file=sys.stderr)
+        sys.exit(2)
+
 import publish as tv                                              # noqa: E402  复用鉴权/接口封装
 from botkit import model as mdl                                   # noqa: E402
 from botkit import outbound                                       # noqa: E402
