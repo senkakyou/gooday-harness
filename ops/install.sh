@@ -156,12 +156,29 @@ for dir in "$REPO"/workflows/*/; do
         cp "$dir/config.example.json" "$dir/config.json"
         echo "    ℹ️  $name：已播种 config.json，记得按本机改"
     fi
-    who="$(grep -oP '(?<=^# runas:)\s*\S+' "$sched" | tr -d ' ' | head -1)"
+    # ⚠️ 这两处的 `|| true` 不是保险，是【必需】（2026-09-10 实测）：
+    #    grep 把所有行都滤掉时返回 1，配上本脚本开头的 `set -euo pipefail`，
+    #    命令替换失败会当场杀掉整个脚本——**不打印任何东西，只留一个退出码 1**。
+    #    表现就是安装停在「更新 crontab」那行，看起来像跑完了。
+    #
+    #    触发条件是合法的：一条【刻意不设定时任务】的流程（workflows/order 就是，
+    #    它的开工由大海显式下令而不是轮询），schedule.cron 里只有注释；
+    #    以及一份漏写 `# runas:` 的 schedule.cron（下一行的 ${who:-root}
+    #    本来就预期它可能为空，说明这个坑一直在，只是还没人踩到）。
+    who="$(grep -oP '(?<=^# runas:)\s*\S+' "$sched" 2>/dev/null | tr -d ' ' | head -1 || true)"
     who="${who:-root}"
-    body="$(grep -v '^\s*#' "$sched" | grep -v '^\s*$' | sed "s/{{NAME}}/$name/g")"
-    CRON_BY_USER[$who]+="# ── $name ──"$'\n'"$body"$'\n'
+    body="$(grep -v '^\s*#' "$sched" | grep -v '^\s*$' | sed "s/{{NAME}}/$name/g" || true)"
+
     install -d -m 755 "/var/lib/gooday-harness/state/$name" \
                       "/srv/gooday-harness/media/$name"
+
+    # 没有任务行的流程【要说出来】。静静跳过的话，"这条流程没装上定时任务"
+    # 和"这条流程刻意没有定时任务"在输出里长得一模一样。
+    if [[ -z "$body" ]]; then
+        echo "    ℹ️  $name：schedule.cron 无任务行（刻意不设定时任务），不进 crontab"
+        continue
+    fi
+    CRON_BY_USER[$who]+="# ── $name ──"$'\n'"$body"$'\n'
 done
 
 for who in "${!CRON_BY_USER[@]}"; do
