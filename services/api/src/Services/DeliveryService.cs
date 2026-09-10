@@ -54,23 +54,45 @@ public class DeliveryService(AppDbContext db, IWebHostEnvironment env)
         return new DeliveryStatus(missing.Count == 0, missing.ToArray());
     }
 
-    /// <summary>某张工单的交付物（一张工单只认一件）。</summary>
+    /// <summary>某张订单的交付物（一张订单只认一件）。</summary>
     public Task<Tool?> ForTicketAsync(int ticketId)
         => db.Tools.FirstOrDefaultAsync(t => t.SourceTicketId == ticketId);
 
     /// <summary>
-    /// 工单能不能结单：必须有交付物、归属客户本人、且三样齐全。
-    /// 返回 null 表示可以结，否则返回拦下来的原因。
+    /// 能不能放行给客户验收：必须有交付物、归属客户本人、已发布、且三样齐全。
+    /// 返回 null 表示可以放行，否则返回拦下来的原因。
+    ///
+    /// ⚠️ 【ClientId 的语义 2026-09-10 变了】（docs/decisions/006）：
+    ///    以前 Tickets.ClientId 指 Users.Id，可以直接和 Tools.OwnerUserId 比；
+    ///    现在它指 Clients.Id（与 FinanceRecords 对齐），**必须先换算成 UserId**。
+    ///
+    ///    这里是本次重构最容易改错的一处：少了这一步换算，
+    ///    `tool.OwnerUserId != t.ClientId` 比的是「用户 ID」和「客户档案 ID」，
+    ///    两个都是小整数，撞上就静默判等 ——
+    ///    **把别人的交付物判给这个客户，而且看起来一切正常。**
     /// </summary>
-    public async Task<string?> BlockDoneReasonAsync(Ticket t)
+    public async Task<string?> BlockReleaseReasonAsync(Ticket t)
     {
         var tool = await ForTicketAsync(t.Id);
         if (tool == null)
-            return "交付不达标：工具一览里没有这张工单的交付物（交付=上架一件归属客户的工具）";
-        if (t.ClientId != null && tool.OwnerUserId != t.ClientId)
-            return $"交付不达标：交付物挂在用户#{tool.OwnerUserId} 名下，不是本单客户#{t.ClientId}";
+            return "交付不达标：工具一览里没有这张订单的交付物（交付=上架一件归属客户的工具）";
+
+        // Tickets.ClientId → Clients.Id → Clients.UserId → 才能和 Tools.OwnerUserId 比
+        int? clientUserId = t.ClientId == null ? null
+            : await db.Clients.Where(c => c.Id == t.ClientId)
+                              .Select(c => c.UserId).FirstOrDefaultAsync();
+
+        if (clientUserId != null && tool.OwnerUserId != clientUserId)
+            return $"交付不达标：交付物挂在用户#{tool.OwnerUserId} 名下，"
+                 + $"不是本单客户（客户档案#{t.ClientId} → 用户#{clientUserId}）";
+
+        // 客户档案存在但没绑账号（线下客户）：交付物挂不到谁名下，不能自动放行
+        if (t.ClientId != null && clientUserId == null)
+            return $"交付不达标：客户档案#{t.ClientId} 没有绑定平台账号，交付物挂不到他名下";
+
         if (!tool.IsPublished)
             return "交付不达标：交付物还没发布，客户看不到";
+
         var st = Check(tool);
         return st.Complete ? null : $"交付不达标：{st.Why}（大海定的口径是在线、视频、下载三样全）";
     }

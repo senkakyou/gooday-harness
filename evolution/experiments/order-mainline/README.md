@@ -51,15 +51,39 @@
 - **数据回滚点**：`/srv/gooday-harness/backups/gooday/pre-order-mainline-v2.db`
   （`.backup` 在线备份，`PRAGMA integrity_check = ok`，Users=15 / Tickets=6 / Tools=103 与生产一致）
 - **待删表归档**：`/srv/gooday-harness/backups/pre-order-mainline-v2-archive/*.json`
-- 回滚命令：
+- 回滚命令（**已于 2026-09-10 在副本上实测演练**，见下）：
   ```bash
+  D=/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db
+
   git -C /opt/gooday-harness checkout pre-order-mainline-v2
-  sudo systemctl stop gooday-harness-*                       # 先停写入方
-  sudo cp /srv/gooday-harness/backups/gooday/pre-order-mainline-v2.db \
-          /var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db
+  docker stop gooday-harness-api                  # ← 主要写入方是容器，不是 systemd 服务
+  sudo systemctl stop gooday-harness-bot-lingxi gooday-harness-bot-ruyi
+
+  sudo cp /srv/gooday-harness/backups/gooday/pre-order-mainline-v2.db "$D"
+  sudo rm -f "$D-wal" "$D-shm"                    # ← 【少这一行回滚就是无效的】
+
+  docker start gooday-harness-api
   sudo bash /opt/gooday-harness/ops/install.sh
   ```
-- **回滚必须演练过**：P3 动库之前先在副本上跑一遍上面这串，确认 Users=15 能查出来再动生产。
+
+### 回滚演练结果（2026-09-10，在副本上真跑，不是推演）
+
+**第一版回滚命令是错的**，演练当场把它证伪了。造一个「主库旧、`-wal` 里有新写入」的现场后：
+
+| 做法 | 结果 |
+|---|---|
+| 只 `cp` 备份覆盖 `.db`，不动 `-wal` | ❌ 陈旧 WAL 被重放，**要回滚掉的那条写入又回来了**——回滚等于没回滚 |
+| `cp` 覆盖 + `rm -f -wal -shm`，但备份是 `cp` 出来的 | ❌ `no such table` —— **`cp` 一个 WAL 库根本不算备份**，表和数据当时还在 WAL 里，拷到的主文件是空的 |
+| `sqlite3 .backup` 出来的备份 + `cp` 覆盖 + `rm -f -wal -shm` | ✅ 只剩旧数据，新写入被真正回滚掉 |
+
+两条换来的知识：
+
+1. **`-wal` / `-shm` 必须删**，否则恢复出来的是「旧主库 + 新 WAL」的混合体。
+2. **备份必须用 `sqlite3 .backup`（在线备份 API），不能用 `cp`。**
+   本次的 `pre-order-mainline-v2.db` 用的就是 `.backup`（`integrity_check = ok`，
+   Users=15 / Tickets=6 / Tools=103 与生产一致）；
+   `workflows/db-snapshot` 也一直用 `.backup`，它的注释里正好写着这个陷阱——
+   所以每小时那批自动备份是有效的，这条顺便复核过了。
 
 ## 判据
 

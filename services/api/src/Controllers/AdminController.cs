@@ -368,25 +368,15 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         foreach (var pm in await db.PrivateMessages.Select(m => new { m.Content, m.SenderUsername, m.ReceiverUsername }).ToListAsync())
             Scan(pm.Content, $"私信({pm.SenderUsername}→{pm.ReceiverUsername})");
 
-        // 定制需求单：附件以「【附件】name: /uploads/requests/..」形式内嵌在描述里(见 RequestsHome.jsx)
-        foreach (var r in await db.DevRequests.Select(x => new { x.Title, x.Description, x.AdminNote }).ToListAsync()) {
-            Scan(r.Description, $"需求单：{r.Title}");
-            Scan(r.AdminNote, $"需求单备注：{r.Title}");
-        }
+        // 订单需求：附件以「【附件】name: /uploads/requests/..」形式内嵌在描述里(见 RequestsHome.jsx)
+        foreach (var tk in await db.Tickets.Select(t => new { t.Id, t.Description }).ToListAsync())
+            Scan(tk.Description, $"订单#{tk.Id}");
 
-        // 项目：描述/方案/交付说明/内部备注，交付物链接落在其中(交付物在 /uploads/deliverables/..)
-        foreach (var pj in await db.Projects.Select(p => new { p.Title, p.Description, p.PlanMarkdown, p.DeliveryNotes, p.AdminNote }).ToListAsync()) {
-            Scan(pj.Description, $"项目描述：{pj.Title}");
-            Scan(pj.PlanMarkdown, $"项目方案：{pj.Title}");
-            Scan(pj.DeliveryNotes, $"项目交付说明：{pj.Title}");
-            Scan(pj.AdminNote, $"项目备注：{pj.Title}");
-        }
-
-        // 工单描述/备注：可能内嵌交付截图或需求附件链接
-        foreach (var tk in await db.Tickets.Select(t => new { t.Id, t.Description, t.AdminNote }).ToListAsync()) {
-            Scan(tk.Description, $"工单#{tk.Id}");
-            Scan(tk.AdminNote, $"工单备注#{tk.Id}");
-        }
+        // 订单工作记录：交付路径、证据引用会落在这里
+        // 【它和下面 FixReferencesAsync 里的循环必须一一对应】——
+        // 只在一边加表，就会出现「扫描说没人引用 → 允许改名 → 另一边没跟着改 → 链接断」。
+        foreach (var lg in await db.TicketLogs.Select(l => new { l.TicketId, l.Text }).ToListAsync())
+            Scan(lg.Text, $"订单记录#{lg.TicketId}");
 
         // 财务付款凭证：EvidenceUrl 归档路径（如意经手），可能指向 /uploads
         foreach (var fr in await db.FinanceRecords.Select(f => new { f.Id, f.EvidenceUrl }).ToListAsync())
@@ -575,20 +565,11 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         // 否则改名/移动这些文件会把客户下载链接改断
         foreach (var pm in await db.PrivateMessages.ToListAsync())
             pm.Content = Fix(pm.Content) ?? pm.Content;
-        foreach (var r in await db.DevRequests.ToListAsync()) {
-            r.Description = Fix(r.Description) ?? r.Description;
-            r.AdminNote   = Fix(r.AdminNote);
-        }
-        foreach (var pj in await db.Projects.ToListAsync()) {
-            pj.Description   = Fix(pj.Description) ?? pj.Description;
-            pj.PlanMarkdown  = Fix(pj.PlanMarkdown);
-            pj.DeliveryNotes = Fix(pj.DeliveryNotes);
-            pj.AdminNote     = Fix(pj.AdminNote);
-        }
-        foreach (var tk in await db.Tickets.ToListAsync()) {
+        foreach (var tk in await db.Tickets.ToListAsync())
             tk.Description = Fix(tk.Description) ?? tk.Description;
-            tk.AdminNote   = Fix(tk.AdminNote);
-        }
+        // 与 BuildFileUsageAsync 的扫描面一一对应，见那边的注释
+        foreach (var lg in await db.TicketLogs.ToListAsync())
+            lg.Text = Fix(lg.Text) ?? lg.Text;
         foreach (var fr in await db.FinanceRecords.ToListAsync())
             fr.EvidenceUrl = Fix(fr.EvidenceUrl);
 
@@ -849,11 +830,23 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
     public async Task<IActionResult> Deliver([FromBody] DeliverDto dto, [FromServices] DeliveryService delivery)
     {
         var ticket = await db.Tickets.FirstOrDefaultAsync(t => t.Id == dto.TicketId);
-        if (ticket == null) return NotFound(new { message = $"工单 #{dto.TicketId} 不存在" });
-        if (ticket.ClientId is not int clientId)
+        if (ticket == null) return NotFound(new { message = $"订单 #{dto.TicketId} 不存在" });
+
+        // ⚠️ 【必须换算，不能直接用 ticket.ClientId】（2026-09-10 语义变更）：
+        //    Tickets.ClientId 现在指 Clients.Id，而 Tools.OwnerUserId 要的是 Users.Id。
+        //    直接赋值的话两个都是小整数，编译器不会报错，
+        //    结果是**交付物挂到了另一个用户名下**——而后台看起来一切正常。
+        if (ticket.ClientId is not int clientRecordId)
             return BadRequest(new { message =
-                "这张工单没有关联平台账号（线下客户），没法把交付物挂到谁名下。" +
-                "先让客户注册并在工单里绑定 ClientId，或者走老路（私信发链接）。" });
+                "这张订单没有关联客户档案，没法把交付物挂到谁名下。" +
+                "先在订单里绑定客户，或者走老路（私信发链接）。" });
+
+        var clientId = await db.Clients.Where(c => c.Id == clientRecordId)
+                                       .Select(c => c.UserId).FirstOrDefaultAsync();
+        if (clientId is not int ownerUserId)
+            return BadRequest(new { message =
+                $"客户档案 #{clientRecordId} 没有绑定平台账号（线下客户），" +
+                "交付物挂不到谁名下。先让客户注册并把账号绑到客户档案上。" });
 
         var tool = await delivery.ForTicketAsync(dto.TicketId);
         if (tool == null) {
@@ -869,7 +862,7 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
                 SourceTicketId = ticket.Id,
                 // 【默认私有，且只有本单客户】。这两条不接受调用方覆盖——
                 // 交付物默认给全站看，是这套设计里最不能出的错
-                OwnerUserId = clientId,
+                OwnerUserId = ownerUserId,
                 Visibility = "private",
                 // 【建的时候不发布】。上架发生在出片之前，如果出片失败就停在这儿，
                 // 客户的工具一览里会躺着一件能打开、但没讲解也没人通知他的半成品——
@@ -894,32 +887,38 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
             tool.VideoUrl = vurl; tool.VideoSource = vsrc;
         }
         if (dto.VideoDuration > 0) tool.VideoDuration = dto.VideoDuration;
-        tool.OwnerUserId = clientId;                 // 每次都钉死，防止被别的路径改歪
+        tool.OwnerUserId = ownerUserId;              // 每次都钉死，防止被别的路径改歪
         tool.SourceTicketId = ticket.Id;
         tool.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
 
         var status = delivery.Check(tool);
-        var notified = false;
-        if (status.Complete) {
-            // 三样齐了才让客户看见，然后才通知。顺序不能反：
-            // 先通知后发布，客户点进来会扑空
-            if (!tool.IsPublished) {
-                tool.IsPublished = true;
-                await db.SaveChangesAsync();
-            }
-            notified = await delivery.NotifyCustomerAsync(tool, ticket);
+        if (status.Complete && !tool.IsPublished) {
+            // 三样齐了才让客户【有可能】看见。发布 ≠ 通知，见下。
+            tool.IsPublished = true;
+            await db.SaveChangesAsync();
         }
+
+        // ═══ 2026-09-10：这里原来会自动通知客户，已删（docs/decisions/006）═══
+        //
+        //   上一版是「三样一齐就让如意发通知」。在新流程里这是抢跑：
+        //   大海要先看过东西、点「放行验收」，如意才通知客户。
+        //
+        //   通知现在只发生在一个地方——POST /api/tickets/{id}/transition
+        //   的 release 事件里。**两个地方都能通知客户，就一定会出现
+        //   「客户先收到通知，大海还没看过」**，而这条链路上大海是最后一道人工闸。
+        //
+        //   幂等仍由 DeliveryService.NotifyCustomerAsync 自己保证。
+        // ═══════════════════════════════════════════════════════════════
 
         return Ok(new {
             toolId = tool.Id, tool.Slug, tool.Name,
-            ownerUserId = tool.OwnerUserId, tool.Visibility,
+            ownerUserId = tool.OwnerUserId, tool.Visibility, tool.IsPublished,
             complete = status.Complete,
             missing = status.Missing,
-            notified,
             hint = status.Complete
-                ? (notified ? "三样齐了，已让如意通知客户" : "三样齐了，之前已通知过，不重复打扰")
-                : "还差东西，先不通知客户——交付对客户必须是原子的，别让他看见半成品",
+                ? "三样齐了，等大海点「放行验收」才通知客户"
+                : "还差东西，先不放行——交付对客户必须是原子的，别让他看见半成品",
         });
     }
 
@@ -1255,7 +1254,9 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         }
         var toolDates = await db.Tools.Where(t => t.CreatedAt >= weekAgo).Select(t => t.CreatedAt).ToListAsync();
         var userDates = await db.Users.Where(u => u.CreatedAt >= weekAgo).Select(u => u.CreatedAt).ToListAsync();
-        var reqDates = await db.DevRequests.Where(r => r.CreatedAt >= weekAgo).Select(r => r.CreatedAt).ToListAsync();
+        // 「需求」这条趋势线的数据源换成订单本身（DevRequests 表已删，
+        // 需求单→工单那层转换没有了，网页表单现在直接建 NEW 订单）
+        var reqDates = await db.Tickets.Where(t => t.CreatedAt >= weekAgo).Select(t => t.CreatedAt).ToListAsync();
         var purDates = await db.ToolPurchases.Where(p => p.CreatedAt >= weekAgo).Select(p => p.CreatedAt).ToListAsync();
         var revRows = await db.ToolPurchases.Where(p => p.Status == "activated" && p.CreatedAt >= weekAgo)
             .Select(p => new { p.CreatedAt, p.Amount }).ToListAsync();

@@ -24,7 +24,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<ToolDownload> ToolDownloads => Set<ToolDownload>();
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<ToolUsageLog> ToolUsageLogs => Set<ToolUsageLog>();
-    public DbSet<DevRequest> DevRequests => Set<DevRequest>();
+    // DevRequests 已删（2026-09-10 / decisions 006）：「需求单 → 工单」是纯转换层。
+    // 网页表单现在直接建 NEW 订单，如意的接待也直接开单，中间不再多一个对象。
     public DbSet<ToolPurchase> ToolPurchases => Set<ToolPurchase>();
 
     // 论坛
@@ -66,28 +67,25 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     // 访问记录
     public DbSet<AccessLog> AccessLogs => Set<AccessLog>();
 
-    // 工单系统（数字公司·定制开发业务）
+    // 订单（数字公司·定制开发业务的唯一业务对象，对客称「订单」）
     public DbSet<Ticket> Tickets => Set<Ticket>();
+
+    // 订单工作记录（只写不调度，没有消费者——见 Models/TicketLog.cs）
+    public DbSet<TicketLog> TicketLogs => Set<TicketLog>();
 
     // 客户档案（数字公司·客户沉淀与画像）
     public DbSet<Client> Clients => Set<Client>();
 
-    // 项目档案（数字公司·项目执行记录）
-    public DbSet<Project> Projects => Set<Project>();
-
-    // 决策日志（数字公司·关键决策归档）
-    public DbSet<Decision> Decisions => Set<Decision>();
-
-    // 财务记录（数字公司·收支流水与统计）
+    // 财务记录（数字公司·收支流水与统计，大海手工填）
     public DbSet<FinanceRecord> FinanceRecords => Set<FinanceRecord>();
 
-    // 项目子任务（数字公司·擎天柱拆解的执行任务）
-    public DbSet<ProjectTask> ProjectTasks => Set<ProjectTask>();
+    // ── 2026-09-10 订单主链路 v2（docs/decisions/006）删掉的四个 DbSet ──
+    //   Projects / ProjectTasks / Decisions / TicketEvents
+    // 「工单→项目→子任务→事件」四层对象，实测 6 行工单配 6 个项目、42 个子任务、
+    // 169 条事件，其中 119 条事件永远卡在 new 没人消费；Decisions 表 0 行却带着
+    // 完整的 model 与 5 个 CRUD 端点。方案与拆解归 Harness 的证据链，不进业务库。
 
-    // 工单事件流水（数字公司 V3·调度凭证 + 审计日志 + 报表数据源）
-    public DbSet<TicketEvent> TicketEvents => Set<TicketEvent>();
-
-    // 系统配置（Key-Value·小额自动放行等运行期开关）
+    // 系统配置（Key-Value·如意直连开关、留言板开关、首页模块开关、模型选择）
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
 
     // 有声读书（书库 + 章节[音频/视频·上传/外链] + 续播进度）
@@ -121,9 +119,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         // 复合索引：加速"查某用户某时间段的使用记录"这类查询
         m.Entity<ToolUsageLog>().HasIndex(l => new { l.UserId, l.UsedAt });
-
-        // 索引：加速按状态筛选需求
-        m.Entity<DevRequest>().HasIndex(r => r.Status);
 
         // 索引：加速按用户/工具/状态查购买记录
         m.Entity<ToolPurchase>().HasIndex(p => p.UserId);
@@ -264,38 +259,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         m.Entity<Client>()
             .HasOne(c => c.User).WithMany().HasForeignKey(c => c.UserId).OnDelete(DeleteBehavior.SetNull);
 
-        // 工单系统
+        // 订单
         m.Entity<Ticket>().HasIndex(t => t.TicketNo).IsUnique();
         m.Entity<Ticket>().HasIndex(t => t.Status);
         m.Entity<Ticket>().HasIndex(t => t.CreatedAt);
         m.Entity<Ticket>()
             .HasOne(t => t.Client).WithMany().HasForeignKey(t => t.ClientId).OnDelete(DeleteBehavior.SetNull);
-        m.Entity<Ticket>()
-            .HasOne(t => t.Assignee).WithMany().HasForeignKey(t => t.AssigneeId).OnDelete(DeleteBehavior.SetNull);
 
-        // 项目档案
-        m.Entity<Project>().HasIndex(p => p.Status);
-        m.Entity<Project>().HasIndex(p => p.CreatedAt);
-        m.Entity<Project>()
-            .HasOne(p => p.Ticket).WithMany().HasForeignKey(p => p.TicketId).OnDelete(DeleteBehavior.SetNull);
-        m.Entity<Project>()
-            .HasOne(p => p.Client).WithMany().HasForeignKey(p => p.ClientId).OnDelete(DeleteBehavior.SetNull);
-        m.Entity<Project>()
-            .HasOne(p => p.Assignee).WithMany().HasForeignKey(p => p.AssigneeId).OnDelete(DeleteBehavior.SetNull);
-
-        // 决策日志
-        m.Entity<Decision>().HasIndex(d => d.CreatedAt);
-        m.Entity<Decision>().HasIndex(d => d.DecisionType);
-        m.Entity<Decision>()
-            .HasOne(d => d.Project).WithMany().HasForeignKey(d => d.ProjectId).OnDelete(DeleteBehavior.SetNull);
-        m.Entity<Decision>()
-            .HasOne(d => d.Ticket).WithMany().HasForeignKey(d => d.TicketId).OnDelete(DeleteBehavior.SetNull);
-
-        // 项目子任务
-        m.Entity<ProjectTask>().HasIndex(t => t.ProjectId);
-        m.Entity<ProjectTask>().HasIndex(t => t.Status);
-        m.Entity<ProjectTask>()
-            .HasOne(t => t.Project).WithMany().HasForeignKey(t => t.ProjectId).OnDelete(DeleteBehavior.Cascade);
+        // 订单工作记录：按订单查时间线是唯一的读法
+        m.Entity<TicketLog>().HasIndex(l => new { l.TicketId, l.At });
 
         // 财务记录
         m.Entity<FinanceRecord>().HasIndex(f => f.CreatedAt);
@@ -306,11 +278,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .HasOne(f => f.Ticket).WithMany().HasForeignKey(f => f.TicketId).OnDelete(DeleteBehavior.SetNull);
         m.Entity<FinanceRecord>()
             .HasOne(f => f.Client).WithMany().HasForeignKey(f => f.ClientId).OnDelete(DeleteBehavior.SetNull);
-
-        // 工单事件流水（V3）
-        m.Entity<TicketEvent>().HasIndex(e => new { e.Status, e.CreatedAt });  // dispatcher 轮询主索引
-        m.Entity<TicketEvent>().HasIndex(e => new { e.TicketId, e.CreatedAt }); // 单工单时间线
-        m.Entity<TicketEvent>().HasIndex(e => e.EventType);
 
         // 系统配置：Key 唯一
         m.Entity<SystemSetting>().HasIndex(s => s.Key).IsUnique();

@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using GoodayTools.Data;
 using GoodayTools.Models;
+using GoodayTools.Services;
 
 namespace GoodayTools.Controllers;
 
@@ -113,21 +114,24 @@ public class ClientsController(AppDbContext db) : ControllerBase
             .FirstOrDefaultAsync(c => c.Id == id);
         if (c == null) return NotFound(new { message = "客户不存在" });
 
-        // 工单历史
+        // 订单历史。
+        // ⚠️ 【比的是 t.ClientId == c.Id，不是 c.UserId】（2026-09-10 语义变更）：
+        //    Tickets.ClientId 现在指 Clients.Id。写成 c.UserId 编译器一个字都不会说
+        //    （两边都是 int?），运行时就是把【另一个客户】的订单算到这个人头上。
         var tickets = await db.Tickets
-            .Where(t => t.ClientId == c.UserId || t.ClientName == c.Name || t.ClientContact == c.Contact)
+            .Where(t => t.ClientId == c.Id || t.ClientName == c.Name || t.ClientContact == c.Contact)
             .OrderByDescending(t => t.CreatedAt)
             .Select(t => new {
-                t.Id, t.TicketNo, t.Title, t.Status, t.Priority,
-                t.Budget, t.EstimatedPrice, t.Source,
-                t.CreatedAt, t.UpdatedAt, t.DueAt
+                t.Id, t.TicketNo, t.Title, t.Status, t.BlockedReason,
+                t.Amount, t.DeliveredAt,
+                t.CreatedAt, t.UpdatedAt
             })
             .ToListAsync();
 
         // 统计
         var ticketTotal = tickets.Count;
-        var ticketDone  = tickets.Count(t => t.Status == "done");
-        var totalAmount = tickets.Sum(t => t.EstimatedPrice ?? 0);
+        var ticketDone  = tickets.Count(t => t.Status == TicketWorkflow.Closed);
+        var totalAmount = tickets.Sum(t => t.Amount ?? 0);
 
         return Ok(new {
             c.Id, c.Name, c.Contact, c.ContactType,
@@ -276,10 +280,11 @@ public class ClientsController(AppDbContext db) : ControllerBase
         var c = await db.Clients.FindAsync(id);
         if (c == null) return NotFound(new { message = "客户不存在" });
 
+        // 同上：t.ClientId 指 Clients.Id，不能拿 c.UserId 比
         var tickets = await db.Tickets
-            .Where(t => t.ClientId == c.UserId || t.ClientName == c.Name || t.ClientContact == c.Contact)
+            .Where(t => t.ClientId == c.Id || t.ClientName == c.Name || t.ClientContact == c.Contact)
             .OrderByDescending(t => t.CreatedAt)
-            .Select(t => new { t.TicketNo, t.Title, t.Description, t.Status, t.Budget, t.EstimatedPrice, t.CreatedAt })
+            .Select(t => new { t.TicketNo, t.Title, t.Description, t.Status, t.Amount, t.CreatedAt })
             .ToListAsync();
 
         // 如果有关联用户，取近期私信（与如意的对话）
