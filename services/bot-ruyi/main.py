@@ -19,6 +19,9 @@ sys.path.insert(0, os.path.join(REPO, "packages", "botkit"))
 from runner import Bot                                    # noqa: E402
 import outbound                                          # noqa: E402
 
+sys.path.insert(0, HERE)
+import intake                                            # noqa: E402
+
 NAME = "bot-ruyi"
 
 
@@ -71,8 +74,8 @@ def client_context(cfg, sender_id=None):
     教训：名字和注释不是实现。看函数体，不看函数名。
     ═══════════════════════════════════════════════════════════
     """
-    base = ("【回复纪律】你不做技术判断、不承诺工期报价、不透露内部结构。"
-            "拿不准的一律说「我记下来，团队确认后回你」。")
+    base = ("【回复纪律】你不做技术判断、不承诺工期报价、不透露内部结构，"
+            "**钱的事一句都不谈**。拿不准的一律说「我记下来，团队确认后回你」。")
     if not sender_id:
         return base
 
@@ -80,14 +83,16 @@ def client_context(cfg, sender_id=None):
     conn.row_factory = sqlite3.Row
     try:
         who = conn.execute("SELECT Username FROM Users WHERE Id=?", (sender_id,)).fetchone()
-        reqs = conn.execute(
-            "SELECT Title, Description, Budget, Status, CreatedAt FROM DevRequests "
-            "WHERE UserId=? ORDER BY Id DESC LIMIT 3", (sender_id,)).fetchall()
+        # 【ClientId 指 Clients.Id，不是 Users.Id】（2026-09-10 语义变更）。
+        # 直接写 WHERE ClientId=? 传 sender_id 不会报错——两边都是整数——
+        # 而是【安静地查出另一个客户的订单】。必须经 Clients 换算。
         tks = conn.execute(
-            "SELECT TicketNo, Title, Status, EstimatedPrice FROM Tickets "
-            "WHERE ClientId=? ORDER BY Id DESC LIMIT 5", (sender_id,)).fetchall()
+            "SELECT TicketNo, Title, Status, BlockedReason FROM Tickets "
+            "WHERE ClientId IN (SELECT Id FROM Clients WHERE UserId=?) "
+            "   OR ClientContact = (SELECT Contact FROM Clients WHERE UserId=? LIMIT 1) "
+            "ORDER BY Id DESC LIMIT 5", (sender_id, sender_id)).fetchall()
         cli = conn.execute(
-            "SELECT Contact, ContactType, Budget, PreferredContact FROM Clients "
+            "SELECT Contact, ContactType, PreferredContact FROM Clients "
             "WHERE UserId=? ORDER BY Id DESC LIMIT 1", (sender_id,)).fetchone()
     except Exception as e:
         # 查不到不能阻断接待——但要说明"这次没查到"，
@@ -99,30 +104,30 @@ def client_context(cfg, sender_id=None):
 
     lines = [base, f"\n【客户资料 · {who['Username'] if who else sender_id}】"]
     if cli:
-        lines.append(f"联系方式：{cli['ContactType']} {cli['Contact']}；"
-                     f"预算记录：{cli['Budget'] or '未记'}")
+        lines.append(f"联系方式：{cli['ContactType']} {cli['Contact']}")
     else:
         lines.append("客户档案：还没建")
-    if reqs:
-        lines.append("他提过的需求：")
-        for r in reqs:
-            d = " ".join((r["Description"] or "").split())[:200]
-            lines.append(f"  · [{r['Status']}] {r['Title']}"
-                         f"（预算 {r['Budget'] or '未填'}）{d}")
-    else:
-        lines.append("他还没有正式登记过需求单。")
+    # 【不再查 DevRequests】：那张表 2026-09-10 删了，需求单→工单那层转换没有了，
+    # 客户提的需求现在【直接就是订单】。留着查会抛异常，被上面的 except 吞掉，
+    # 表现为如意静默失去客户资料——正是 2026-09-09 修过的那个 bug 的形状。
     if tks:
-        lines.append("他的工单：")
+        lines.append("他的订单：")
         for t in tks:
-            lines.append(f"  · {t['TicketNo']} {t['Title']} → {t['Status']}"
-                         f"（报价 {t['EstimatedPrice'] or '未报'}）")
+            blocked = f"（卡住了：{t['BlockedReason']}）" if t["BlockedReason"] else ""
+            lines.append(f"  · {t['TicketNo']} {t['Title']} → {t['Status']}{blocked}")
+    else:
+        lines.append("他还没有订单。")
     lines.append("**以上是他已经告诉过我们的，别再问一遍。**")
     return "\n".join(lines)
 
 
 if __name__ == "__main__":
     try:
-        FrontDeskBot(NAME, HERE, context=client_context).run()
+        # on_reply=intake.on_reply：她在回复末尾吐一段 ```order 块，
+        # 由 intake.py 做白名单校验后落库。【如意本人仍然一个工具都没有】——
+        # 那段块是「说」，落库的是确定性代码，注入最多让库里多一行 NEW 订单。
+        FrontDeskBot(NAME, HERE, context=client_context,
+                     on_reply=intake.on_reply).run()
     except KeyboardInterrupt:
         sys.exit(0)
     except Exception as e:

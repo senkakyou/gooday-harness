@@ -13,6 +13,7 @@ using System.Security.Claims;
 using GoodayTools.Data;
 using GoodayTools.Hubs;
 using GoodayTools.Models;
+using GoodayTools.Services;
 
 namespace GoodayTools.Controllers;
 
@@ -21,7 +22,6 @@ namespace GoodayTools.Controllers;
 [Authorize]
 public class FriendsController(AppDbContext db, IHubContext<ChatHub> hub) : ControllerBase
 {
-    private static readonly HashSet<string> _privateAccounts = new() { "灵犀", "擎天柱", "威震天", "如意", "招财" };
 
     private int MyId => int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
     private string MyName => User.FindFirst(ClaimTypes.Name)!.Value;
@@ -110,7 +110,7 @@ public class FriendsController(AppDbContext db, IHubContext<ChatHub> hub) : Cont
         var target = await db.Users.FindAsync(userId);
         if (target == null || !target.IsActive) return NotFound(new { message = "用户不存在" });
 
-        if (_privateAccounts.Contains(target.Username) && !User.IsInRole("admin"))
+        if (BotAccounts.Private.Contains(target.Username) && !User.IsInRole("admin"))
             return StatusCode(403, new { message = "无权限添加此用户为好友" });
 
         var existing = await db.Friendships.FirstOrDefaultAsync(f =>
@@ -155,7 +155,7 @@ public class FriendsController(AppDbContext db, IHubContext<ChatHub> hub) : Cont
         if (req == null) return NotFound(new { message = "申请不存在" });
 
         var requester = await db.Users.FindAsync(userId);
-        if (requester != null && _privateAccounts.Contains(requester.Username) && !User.IsInRole("admin"))
+        if (requester != null && BotAccounts.Private.Contains(requester.Username) && !User.IsInRole("admin"))
             return StatusCode(403, new { message = "无权限接受此好友申请" });
 
         req.Status = "accepted";

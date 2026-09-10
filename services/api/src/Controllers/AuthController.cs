@@ -193,14 +193,15 @@ public class AuthController(AppDbContext db, TokenService ts, IWebHostEnvironmen
         if (string.IsNullOrWhiteSpace(q) || q.Length < 1) return Ok(new List<object>());
         var myId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
         var isAdmin = User.IsInRole("admin");
-        var privateAccounts = new HashSet<string> { "灵犀", "擎天柱", "威震天", "如意", "招财", "admin" };
+        // 名单的真源是 Services/BotAccounts.cs，这里只取一份可变副本改（如意直连时要摘掉它）
+        var hidden = BotAccounts.HiddenInSearch();
         // Ruyi.DirectChat=true 时如意可被普通用户搜索到
         var ruyiDirect = !isAdmin && await db.SystemSettings
             .Where(s => s.Key == "Ruyi.DirectChat").Select(s => s.Value).FirstOrDefaultAsync() == "true";
-        if (ruyiDirect) privateAccounts.Remove("如意");
+        if (ruyiDirect) hidden.Remove("如意");
         var users = await db.Users
             .Where(u => u.Id != myId && u.IsActive && u.Username.Contains(q)
-                        && (isAdmin || !privateAccounts.Contains(u.Username)))
+                        && (isAdmin || !hidden.Contains(u.Username)))
             .Select(u => new { u.Id, u.Username, u.AvatarUrl })
             .Take(10)
             .ToListAsync();

@@ -119,6 +119,30 @@ for dir in "$REPO"/services/*/; do
     echo "    gooday-harness-$name"
 done
 
+# ── 2.5 对账：收掉没有来源目录的 unit ──────────────────────────────────
+#
+# 【本脚本原来只装不删】。删掉一个 service 目录后，
+# /etc/systemd/system/gooday-harness-<名>.service 会永远留着：
+#   · systemctl start 还能把它拉起来，ExecStart 指向一个已经不存在的路径；
+#   · 巡检看到的是一个"存在但永远起不来"的服务；
+#   · 而且下次谁手滑 enable 一下，它就又回到开机自启列表里。
+# 2026-09-10 删掉擎天柱/威震天/招财/dispatcher 时撞上（docs/decisions/006）。
+#
+# 【仍然是通配对账，不列举成员】（G04）：判据是「unit 文件在，
+# 而 services/<名>/deploy/unit.service 不在」，与具体有哪些成员无关。
+# 只碰 gooday-harness-* 前缀，别人的 unit 一律不动。
+log "对账：清理没有来源目录的服务单元"
+for unit in "$SD"/gooday-harness-*.service; do
+    base="$(basename "$unit" .service)"
+    name="${base#gooday-harness-}"
+    [[ -f "$REPO/services/$name/deploy/unit.service" ]] && continue
+    echo "    ⚠️ $base 的来源目录已不存在 → 停用并删除单元"
+    systemctl disable --now "$base" >/dev/null 2>&1 || true
+    rm -f "$unit"
+    rm -rf "$SD/$base.service.d"
+    rm -rf "/var/lib/gooday-harness/state/$name"
+done
+
 # ── 3. workflows/*/deploy/schedule.cron —— 只替换本项目的托管块 ────────
 #
 # ⚠️ 绝不整份替换 crontab。

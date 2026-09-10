@@ -107,74 +107,44 @@ def send_message_safe(receiver_id, content, token):
                      tag="daily-report")
 
 
-PRIORITY_LABELS = {"urgent": "🔴", "high": "🟠", "normal": "⚪", "low": "🔵"}
-STATUS_LABELS   = {
-    "pending": "待确认", "analyst_complete": "待客户确认报价", "confirmed": "已确认待付款",
-    "in_progress": "开发中", "reviewing": "终审中", "delivering": "交付待验收",
-    "testing": "测试中", "done": "已完成", "cancelled": "已取消",
-    "failed": "失败待处理", "customer_rejected": "客户拒收", "refunding": "退款中", "refunded": "已退款",
-}
-PROJ_STATUS = {
-    "planning": "规划", "in_progress": "进行中",
-    "testing": "测试", "done": "已完成", "cancelled": "已取消",
+# 只管怎么显示。【状态本身的真源在 API 的 TicketWorkflow】——
+# 这里多一个键少一个键都不影响判断，因为下面用的是 .get(k, k) 兜底。
+STATUS_LABELS = {
+    "NEW": "待接单", "IN_PROGRESS": "开发中", "DELIVERED": "待验收",
+    "CLOSED": "已结单", "BLOCKED": "卡住了", "CANCELLED": "已取消",
 }
 
 
-def _summarize_event(ev):
-    """从 notify 事件提取一行摘要：优先 payload.title，否则 body 首行，截断到 40 字"""
-    import json as _json
-    try:
-        p = _json.loads(ev.get("payload") or "{}")
-    except Exception:
-        p = {}
-    text = (p.get("title") or p.get("body") or ev.get("eventType") or "").strip()
-    first = text.splitlines()[0] if text else ""
-    first = first.replace("**", "")
-    return first[:40] + ("…" if len(first) > 40 else "")
-
-
-def build_report(ticket_data, project_data, finance_data, notifications=None):
+def build_report(ticket_data, finance_data):
     today = date.today().strftime("%Y-%m-%d")
     period = date.today().strftime("%Y-%m")
     lines = [f"📊 **灵犀日报 · {today}**\n"]
 
-    # ── 工单 ──
-    t_stats  = ticket_data.get("stats", {})
+    # ── 订单 ──
+    # stats 是 {状态: 条数}，服务端按实际分组返回。
+    # 【遍历它给的键，不是列举我以为有的几个】——列举法在加状态时必漏，
+    # 而漏掉的那类单会从日报里静默消失。
+    t_stats  = ticket_data.get("stats", {}) or {}
     new_today = ticket_data.get("newToday", [])
     active    = ticket_data.get("active", [])
 
-    lines.append("**🗂 工单**")
-    lines.append(
-        f"总计 {t_stats.get('total', 0)} 条 · "
-        f"待确认 {t_stats.get('pending', 0)} · "
-        f"进行中 {t_stats.get('inProgress', 0)} · "
-        f"已完成 {t_stats.get('done', 0)}"
-    )
+    lines.append("**🗂 订单**")
+    total = sum(t_stats.values())
+    parts = [f"{STATUS_LABELS.get(k, k)} {v}" for k, v in sorted(t_stats.items()) if v]
+    lines.append(f"总计 {total} 条" + ("　·　" + " · ".join(parts) if parts else ""))
     if new_today:
         lines.append(f"今日新增 {len(new_today)} 条：" +
                      "、".join(f"{t['ticketNo']}" for t in new_today[:3]) +
                      ("…" if len(new_today) > 3 else ""))
     if active:
-        for t in active[:4]:
-            pri = PRIORITY_LABELS.get(t.get("priority", "normal"), "")
-            st  = STATUS_LABELS.get(t.get("status", ""), "")
-            lines.append(f"  {pri} [{t['ticketNo']}] {t['title']} · {st}")
-        if len(active) > 4:
-            lines.append(f"  …共 {len(active)} 条活跃工单")
+        for t in active[:6]:
+            st = STATUS_LABELS.get(t.get("status", ""), t.get("status", ""))
+            blocked = f" ⚠️ {t['blockedReason']}" if t.get("blockedReason") else ""
+            lines.append(f"  [{t['ticketNo']}] {t['title']} · {st}{blocked}")
+        if len(active) > 6:
+            lines.append(f"  …共 {len(active)} 条在跑")
     else:
-        lines.append("  暂无活跃工单")
-
-    # ── 项目 ──
-    p = project_data
-    lines.append("")
-    lines.append("**📁 项目**")
-    lines.append(
-        f"总计 {p.get('total', 0)} 个 · "
-        f"规划中 {p.get('planning', 0)} · "
-        f"进行中 {p.get('inProgress', 0)} · "
-        f"测试中 {p.get('testing', 0)} · "
-        f"已完成 {p.get('done', 0)}"
-    )
+        lines.append("  暂无在跑的订单")
 
     # ── 财务（本月） ──
     f = finance_data
@@ -189,19 +159,13 @@ def build_report(ticket_data, project_data, finance_data, notifications=None):
     if pending > 0:
         lines.append(f"⚠️ 待收 ¥{pending:.2f}，请跟进")
 
-    # ── 今日进展（P2/P3，V3 通知分级：这些白天没实时打扰您，汇总在此）──
-    if notifications:
-        p2 = [e for e in notifications if (e.get("level") or "").upper() == "P2"]
-        p3 = [e for e in notifications if (e.get("level") or "").upper() == "P3"]
-        lines.append("")
-        lines.append(f"**🔔 今日进展**（P2 {len(p2)} · P3 {len(p3)}，已为您过滤实时打扰）")
-        for e in p2[:6]:
-            lines.append(f"  · {_summarize_event(e)}")
-        if len(p2) > 6:
-            lines.append(f"  …另有 {len(p2) - 6} 条")
+    # 【「今日进展」整段已删】原来它读 /api/ticket-events?eventType=notify。
+    # 事件表 2026-09-10 删掉了（docs/decisions/006）——它有 119 条永远卡在
+    # new 没人消费，而全站只有这份日报在读其中的 notify 一类。
+    # 订单的动静现在看上面那段，逐单细节看后台的工作记录时间线。
 
     lines.append("")
-    lines.append("详情：`/admin/tickets` · `/admin/projects` · `/admin/finance`")
+    lines.append("详情：`/admin/tickets` · `/admin/finance`")
 
     return "\n".join(lines)
 
@@ -218,14 +182,8 @@ def main():
     try:
         ticket_data = api_get("/api/tickets/daily-report", token)
     except Exception as e:
-        print(f"[lingxi-daily] 获取工单日报失败: {e}", flush=True)
+        print(f"[lingxi-daily] 获取订单日报失败: {e}", flush=True)
         ticket_data = {"stats": {}, "newToday": [], "active": []}
-
-    try:
-        project_data = api_get("/api/projects/stats", token)
-    except Exception as e:
-        print(f"[lingxi-daily] 获取项目统计失败: {e}", flush=True)
-        project_data = {}
 
     try:
         finance_data = api_get(f"/api/finance/monthly-report?period={today_period}", token)
@@ -233,16 +191,7 @@ def main():
         print(f"[lingxi-daily] 获取财务数据失败: {e}", flush=True)
         finance_data = {}
 
-    try:
-        since = date.today().strftime("%Y-%m-%d") + "T00:00:00Z"
-        notifications = api_get(f"/api/ticket-events?eventType=notify&since={since}&limit=500", token)
-        if not isinstance(notifications, list):
-            notifications = []
-    except Exception as e:
-        print(f"[lingxi-daily] 获取今日通知事件失败: {e}", flush=True)
-        notifications = []
-
-    report = build_report(ticket_data, project_data, finance_data, notifications)
+    report = build_report(ticket_data, finance_data)
     print(f"[lingxi-daily] 报告（{len(report)} 字）:\n{report[:300]}...", flush=True)
 
     # 【不再截断】。这里原来是 `if len(report) > 990: report = report[:987] + "..."` ——

@@ -1,0 +1,23 @@
+# runas: root
+#
+# ══ 本流程【故意没有定时任务】════════════════════════════════════════
+#
+#   订单不靠轮询推进：开工是大海一句话，开发是主 Agent 用命令跑，
+#   放行和结单是大海在后台点。整条订单线上一个 cron 都没有，
+#   这是 docs/decisions/006 的核心设计，不是漏配。
+#
+#   上一版有四个定时任务盯着订单（dispatcher 每 15 秒轮询事件表、
+#   dev-requests 每小时三次、deliver 每天 04:40、coo-patrol 每 5 分钟），
+#   而实测三个月里它们一张单都没推动过——只是在空转和刷日志。
+#
+#   文件保留是因为 G06 要求每条 workflow 都有 deploy/schedule.cron；
+#   install.sh 的汇总逻辑是 `grep -v '^\s*#'`，只有注释的文件装不出任何任务。
+#   （那条逻辑在 2026-09-10 之前会因为 grep 返回 1 而静默杀掉整个安装脚本，
+#    已修，见同日 fix(install) 那个提交。）
+#
+#   用法：
+#     python3 workflows/order/run.py start   GD-20260910-001
+#     python3 workflows/order/run.py review  GD-20260910-001
+#     python3 workflows/order/run.py ready   GD-20260910-001
+#     python3 workflows/order/run.py close   GD-20260910-001
+# ═══════════════════════════════════════════════════════════════════

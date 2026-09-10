@@ -65,6 +65,45 @@ public class TicketsController(AppDbContext db, DeliveryService delivery,
             EvidenceRef = evidence, At = DateTime.UtcNow,
         });
 
+    /// <summary>
+    /// 建单后给大海报一份。
+    ///
+    /// 【为什么放在服务端，而不是让如意自己发】：
+    ///   一、建单和通知是同一件事，分成两处就一定会出现「单建了但没人知道」；
+    ///   二、如意的出口白名单是【运行时只放行来找过她的人】，大海通常不在里面，
+    ///       她想发也发不出去——那道白名单是防注入的结构性防线，不该为这个开口子。
+    ///
+    /// 【文案是固定模板，不是模型生成】：报告里说错一句，
+    /// 大海就照着错的去跟客户谈。**这里一个字都不来自客户输入之外的推断。**
+    /// 需求原文照抄，不做摘要。
+    /// </summary>
+    private async Task NotifyOwnerAsync(Ticket t)
+    {
+        var ruyi = await db.Users.FirstOrDefaultAsync(u => u.Username == "如意");
+        var owner = await db.Users.FirstOrDefaultAsync(u => u.Id == TicketWorkflow.OwnerUserId);
+        if (ruyi == null || owner == null) return;
+
+        var body =
+            $"📋 新订单 {t.TicketNo}\n" +
+            $"客户：{(string.IsNullOrWhiteSpace(t.ClientName) ? "—" : t.ClientName)}" +
+            $"（{(string.IsNullOrWhiteSpace(t.ClientContact) ? "无联系方式" : t.ClientContact)}）\n" +
+            $"想做：{t.Title}\n\n" +
+            $"需求原文：\n{t.Description}\n\n" +
+            $"—— 价格和细节你跟客户确认，谈好了在后台填金额、点「开工」，" +
+            $"或者直接跟我说「{t.TicketNo} 开工」。";
+
+        db.PrivateMessages.Add(new PrivateMessage {
+            SenderId = ruyi.Id, SenderUsername = ruyi.Username,
+            ReceiverId = owner.Id, ReceiverUsername = owner.Username,
+            Content = body,
+        });
+        db.Notifications.Add(new Notification {
+            UserId = owner.Id, Type = "request",
+            Title = $"新订单 {t.TicketNo}",
+            Body = t.Title, LinkUrl = "/admin/tickets",
+        });
+    }
+
     // ══ 建单 ═══════════════════════════════════════════════════════
 
     /// 网页公开需求表单提交的字段。【没有预算/金额字段】——如意与前台全程不谈钱。
@@ -105,6 +144,7 @@ public class TicketsController(AppDbContext db, DeliveryService delivery,
         await db.SaveChangesAsync();
 
         Log(t.Id, "created", $"网页需求表单提交（{req.Name}）", userId ?? 0, req.Name);
+        await NotifyOwnerAsync(t);
         await db.SaveChangesAsync();
 
         return Ok(new { message = "收到了，我们会尽快联系你", ticketNo = t.TicketNo, id = t.Id });
@@ -165,6 +205,9 @@ public class TicketsController(AppDbContext db, DeliveryService delivery,
         await db.SaveChangesAsync();
 
         Log(t.Id, "created", $"{CurrentUserName()} 建单", CurrentUserId(), CurrentUserName());
+        // 【建单必报大海】。不是「记得通知」，是建单这个动作本身就包含它——
+        // 唯一例外是大海自己建的单，他不用收自己发的通知。
+        if (CurrentUserId() != TicketWorkflow.OwnerUserId) await NotifyOwnerAsync(t);
         await db.SaveChangesAsync();
 
         return Ok(new { message = "已建单", id = t.Id, ticketNo = t.TicketNo });

@@ -181,14 +181,28 @@ def check_structure():
     # ⚠️ 正则必须写 `_?privateAccounts`：第一版只查带下划线的字段名，
     # 漏掉了 AuthController.cs:196 那份——它是个【局部变量 privateAccounts，没有下划线】。
     # 查名字不查行为的典型：两处写法不对称，规则只覆盖了其中一种。
-    priv = files_containing(r"\b_?privateAccounts\b")
+    # 只数【代码里】的定义。第一版把 .md 也算进去，于是本实验自己的 README
+    # 因为在解释这个坑时写了这个词，被自己的检查器判成「第四处定义」——
+    # 文档提到一个符号不等于定义了它。
+    priv = {p for p in files_containing(r"\b_?privateAccounts\b")
+            if p.endswith(".cs")}
     check("私号名单只有一处定义", len(priv) <= 1,
           "出现在 " + "、".join(sorted(priv)))
 
-    # 旧状态字面量。只挑辨识度高的——done/cancelled 太通用，查了全是误报
+    # 旧的【订单】状态字面量。
+    #
+    # 挑词有两次收窄，都是实测出来的：
+    #   · done / cancelled 太通用，全站到处是别的东西的状态，一查全是误报；
+    #   · refunded / refunding 看着像订单状态，实际是【工具购买】(ToolPurchase)
+    #     和【财务付款】(FinanceRecords.PaymentStatus) 的状态，与订单无关。
+    #     把它们算进来，就是逼着人去改两个不该改的模块——
+    #     那不是"清干净"，是按名字误伤。
+    #
+    # 留下的三个是订单独有的：analyst_complete / customer_rejected / delivering，
+    # 外加小写 in_progress（订单的新写法是大写 IN_PROGRESS）。
     old = files_containing(r"[\"']"
                            r"(analyst_complete|customer_rejected|delivering"
-                           r"|refunding|refunded|in_progress)"
+                           r"|in_progress)"
                            r"[\"']")
     check("旧小写状态字面量已归零", not old,
           "残留于 " + "、".join(sorted(old)))
@@ -215,7 +229,11 @@ def check_db():
     still = dead & tables
     check("五张中间层表已删除", not still, "残留 " + "、".join(sorted(still)))
 
-    check("TicketLog 已建", "TicketLog" in tables)
+    # 表名是 TicketLog【s】——EF 按 DbSet 名复数化建表。
+    # 第一版判据写成单数 "TicketLog"，于是表建好了检查器还是红的。
+    # 这一条改的是【判据写错了名字】，不是为了让它变绿而放松要求：
+    # 真实表名已用 sqlite_master 实查确认（2026-09-10）。
+    check("TicketLogs 已建", "TicketLogs" in tables)
 
     cols = sql("SELECT name FROM pragma_table_info('Tickets')")
     if cols is not None:

@@ -27,13 +27,16 @@ import model as mdl                                       # noqa: E402
 
 NAME = "bot-lingxi"
 
+# 【状态是大写的】（2026-09-10 / decisions 006）。旧的小写写法不会报错——
+# SQL 照样执行，只是恒为 0，于是日报里「进行中」永远是 0 而没人觉得不对。
+# 这正是大写硬切要防的：漏改处立刻沉默地不匹配，而不是悄悄匹配上别的东西。
 FACTS = (
-    ("待分析工单", "SELECT COUNT(*) FROM Tickets WHERE Status='pending'"),
-    ("进行中", "SELECT COUNT(*) FROM Tickets WHERE Status='in_progress'"),
-    ("失败单", "SELECT COUNT(*) FROM Tickets WHERE Status='failed'"),
+    ("待接单", "SELECT COUNT(*) FROM Tickets WHERE Status='NEW'"),
+    ("开发中", "SELECT COUNT(*) FROM Tickets WHERE Status='IN_PROGRESS'"),
+    ("待验收", "SELECT COUNT(*) FROM Tickets WHERE Status='DELIVERED'"),
+    ("卡住了", "SELECT COUNT(*) FROM Tickets WHERE Status='BLOCKED'"),
     ("待收款", "SELECT COUNT(*) FROM FinanceRecords "
              "WHERE Type='income' AND PaymentStatus='pending'"),
-    ("未处理事件", "SELECT COUNT(*) FROM TicketEvents WHERE Status='new'"),
 )
 
 

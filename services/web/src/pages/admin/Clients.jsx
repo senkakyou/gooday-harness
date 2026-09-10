@@ -12,6 +12,13 @@ import {
 import useToastStore from '../../store/toastStore'
 import { confirmDialog } from '../../store/confirmStore'
 
+// 订单状态文案。【只管怎么显示】——状态本身的真源在
+// services/api/src/Services/TicketWorkflow.cs，这里多一个少一个都用 || 兜底。
+const ORDER_STATUS = {
+  NEW: '待接单', IN_PROGRESS: '开发中', DELIVERED: '待验收',
+  CLOSED: '已结单', BLOCKED: '卡住了', CANCELLED: '已取消',
+}
+
 const STATUS_MAP = {
   prospect: '潜在',
   active:   '合作中',
@@ -283,7 +290,7 @@ function ClientDetailPanel({ clientId, onClose, onUpdated }) {
               <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--muted)' }}>{t.ticketNo}</span>
               <span style={{ fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</span>
               <span className={`st-pill ${t.status === 'done' ? 'st-pill-green' : t.status === 'cancelled' ? 'st-pill-muted' : 'st-pill-blue'}`} style={{ fontSize: 10 }}>
-                {t.status === 'done' ? '已完成' : t.status === 'cancelled' ? '已取消' : t.status === 'in_progress' ? '进行中' : t.status === 'pending' ? '待确认' : t.status}
+                {ORDER_STATUS[t.status] || t.status}
               </span>
             </div>
             <div style={{ color: 'var(--muted)', display: 'flex', gap: 8 }}>

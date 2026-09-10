@@ -13,6 +13,7 @@ using System.Security.Claims;
 using GoodayTools.Data;
 using GoodayTools.Hubs;
 using GoodayTools.Models;
+using GoodayTools.Services;
 namespace GoodayTools.Controllers;
 
 [ApiController]
@@ -20,7 +21,6 @@ namespace GoodayTools.Controllers;
 [Authorize]
 public class PrivateMessageController(AppDbContext db, IHubContext<ChatHub> hub, IWebHostEnvironment env) : ControllerBase
 {
-    private static readonly HashSet<string> _privateAccounts = new() { "灵犀", "擎天柱", "威震天", "如意", "招财" };
 
     private int MyId => int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
     private string MyName => User.FindFirst(ClaimTypes.Name)!.Value;
@@ -45,7 +45,7 @@ public class PrivateMessageController(AppDbContext db, IHubContext<ChatHub> hub,
         if (!User.IsInRole("admin"))
         {
             var privateIds = await db.Users
-                .Where(u => _privateAccounts.Contains(u.Username))
+                .Where(u => BotAccounts.Private.Contains(u.Username))
                 .Select(u => u.Id)
                 .ToListAsync();
             // 如意例外：如意主动发起的消息保留；DirectChat 开启时任意如意消息可见
@@ -130,7 +130,7 @@ public class PrivateMessageController(AppDbContext db, IHubContext<ChatHub> hub,
     {
         var myId = MyId;
         var other = await db.Users.FindAsync(userId);
-        if (other != null && _privateAccounts.Contains(other.Username) && !User.IsInRole("admin"))
+        if (other != null && BotAccounts.Private.Contains(other.Username) && !User.IsInRole("admin"))
         {
             // 如意例外：开关开启时任意用户可查看；否则仅如意主动联系过的用户可查看
             bool ruyiDirectChat = other.Username == "如意" &&
@@ -207,10 +207,10 @@ public class PrivateMessageController(AppDbContext db, IHubContext<ChatHub> hub,
 
         var myId = MyId;
 
-        if (_privateAccounts.Contains(receiver.Username) && !User.IsInRole("admin"))
+        if (BotAccounts.Private.Contains(receiver.Username) && !User.IsInRole("admin"))
         {
             // Bot 间通信例外：私有账号之间可以互发消息（如意→擎天柱等）
-            bool isBotSender = _privateAccounts.Contains(MyName);
+            bool isBotSender = BotAccounts.Private.Contains(MyName);
             if (!isBotSender)
             {
                 // 如意开关：Ruyi.DirectChat=true 时任意用户可主动联系如意；
