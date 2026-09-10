@@ -461,6 +461,41 @@ compose 只挂了数据卷与产物目录，容器里从来没有这个脚本。
 
 ---
 
+## 缺口十八：这套部署里没有「临时停用一个服务」这回事，而且它是无声的
+
+2026-09-10 做订单主链路 v2 时实测撞上。
+
+`install.sh` 按 G04 通配扫描 `services/*/deploy/unit.service`，
+对扫到的每个服务**无条件** `systemctl enable --now`：
+
+```bash
+systemctl enable --now "$svc" >/dev/null 2>&1 \
+    || { echo "    ⚠️ $svc enable 失败（开机可能不自启）"; INSTALL_FAILED=1; }
+```
+
+**它会怎么坏**：
+
+1. 你 `systemctl stop` + `disable` 掉一个服务，做迁移、做影子观察、做故障隔离；
+2. 任何人（包括你自己）因为别的原因跑一次 `install.sh`；
+3. 那个服务**被重新 enable 并拉起**，而 `>/dev/null` 让这一步成功时**一个字都不打印**。
+
+实测经过：本次把擎天柱 / 威震天 / 招财 / dispatcher 四个 stop + disable，
+四个都确认 `inactive + disabled`；随后跑 `install.sh` 更新 crontab，
+跑完再查——**四个全部回到 `active + enabled`**，输出里没有任何提示。
+crontab 那半边是生效的，systemd 这半边被静默撤销了。
+
+**当前处置**：本次不修。这四个服务马上要整个删除，
+删目录之后通配扫描自然扫不到，问题对本次不再成立；
+为一次性用途加一个「停用标记」机制，正是本次重构要删的那种中间层。
+
+**下次要注意**：需要长期停用某个服务时，
+`disable` 是无效的——只能删目录，或者给 `install.sh` 加一个随归属方走的
+停用标记（`services/<名>/deploy/disabled`，符合 G06，不违反 G04 的不列举成员）。
+在那之前，**任何「我已经把它停了」的说法都必须用 `is-active` 复验，
+而不是相信自己执行过 stop 命令**。
+
+---
+
 ## 优先级
 
 1. ~~缺口一（Task/Event 无写入方）~~ ✅ 已闭合
