@@ -416,7 +416,7 @@ def cmd_close(args):
     t = find_ticket(args.ticket)
     if t.get("amount") is None:
         raise OrderError(f"{t['ticketNo']} 还没填金额，结不了单"
-                         f"——否则财务表对不上，而账面看着是好的")
+                         f"——这个数是你手工记账时的对照，系统不替你核对")
     transition(t, "close")
     log(f"{t['ticketNo']} → CLOSED。**记得手工填财务表**（招财已退役，没有自动记账）")
     return 0

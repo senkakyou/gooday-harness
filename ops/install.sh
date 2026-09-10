@@ -140,7 +140,16 @@ for unit in "$SD"/gooday-harness-*.service; do
     systemctl disable --now "$base" >/dev/null 2>&1 || true
     rm -f "$unit"
     rm -rf "$SD/$base.service.d"
-    rm -rf "/var/lib/gooday-harness/state/$name"
+    # ⚠️ 【state 目录是 services 与 workflows 共用的命名空间】（灵犀评审 ④）：
+    #    本段判据只查 services/，而第 196 行给 workflows 建的是同一个
+    #    /var/lib/gooday-harness/state/<名>。今天没有重名，但哪天有人把一个
+    #    service 改成同名 workflow，这里就会把那条【活着的流程】的状态抹掉。
+    #    删之前两边都要确认没人认领。
+    if [[ -d "$REPO/workflows/$name" ]]; then
+        echo "       ↳ 但 workflows/$name 还在，state/$name 归它，不删"
+    else
+        rm -rf "/var/lib/gooday-harness/state/$name"
+    fi
 done
 
 # ── 3. workflows/*/deploy/schedule.cron —— 只替换本项目的托管块 ────────

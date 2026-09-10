@@ -158,6 +158,20 @@ def main():
     st, r = req(f"/api/tickets/{tid}/transition", ruyi_tok, "POST", {"event": "start"})
     show("如意（staff）推 start → 403", st == 403, f"HTTP {st} {r.get('message', '')}")
 
+    print("=== 4.5 判据字段也只有大海能改（灵犀评审 ②）===")
+    # 锁住动作是不够的：release 判 ClientId、close 判 Amount，
+    # 而 PUT 只有 [Authorize(Roles="admin,staff")]——灵犀是 admin、如意是 staff。
+    # 注入改掉 ClientId → 大海照常点放行 → 交付物进别人账号。
+    # 闸门没被推开，是它判的那个数被换掉了。
+    st, r = req(f"/api/tickets/{tid}", ruyi_tok, "PUT", {"clientId": 99})
+    show("如意改 ClientId → 403", st == 403, f"HTTP {st} {r.get('message','')[:40]}")
+    st, r = req(f"/api/tickets/{tid}", ruyi_tok, "PUT", {"amount": 1})
+    show("如意改 Amount → 403", st == 403, f"HTTP {st}")
+    st, r = req(f"/api/tickets/{tid}", ruyi_tok, "PUT", {"description": NEED + "（如意补充的细节）"})
+    show("但如意仍能改需求正文（她的本职）", st == 200, f"HTTP {st} {r.get('changed')}")
+    _, cur = req(f"/api/tickets/{tid}", owner_tok)
+    show("ClientId 没有被改动", cur.get("clientId") is None, str(cur.get("clientId")))
+
     print("=== 5. 非法迁移要 409，且要说清此刻能做什么 ===")
     st, r = req(f"/api/tickets/{tid}/transition", owner_tok, "POST", {"event": "close"})
     show("NEW 直接 close → 409", st == 409, f"HTTP {st} {r.get('message', '')}")

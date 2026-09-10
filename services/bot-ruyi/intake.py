@@ -108,7 +108,7 @@ def _recent(conn, since_ts):
         "SELECT COUNT(*) FROM Tickets WHERE CreatedAt >= ?", (since_ts,)).fetchone()[0]
 
 
-def check_quota_and_dup(db, d):
+def check_quota_and_dup(db, d, sender_id):
     """防灌 + 24 小时幂等。
 
     【幂等按「客户 + 标题」指纹，不按订单号】：如意每轮都可能把同一段
@@ -120,16 +120,23 @@ def check_quota_and_dup(db, d):
         if _recent(conn, day_ago) >= GLOBAL_24H:
             raise Rejected(f"全站 24 小时内已建 {GLOBAL_24H} 单，转人工")
 
+        # ⚠️ 【按 sender_id 计数，不按 d["contact"]】（灵犀评审 ③）：
+        #    contact 是【模型吐出来的字符串】，客户诱导如意每次换一个写法，
+        #    「每客户 24h 两单」就形同虚设，只剩全站 10 单那道——
+        #    而那 10 单还和公开表单共用额度。
+        #    sender_id 来自私信记录，不经过模型，是这条链路上唯一可信的身份。
         n = conn.execute(
-            "SELECT COUNT(*) FROM Tickets WHERE CreatedAt >= ? AND ClientContact = ?",
-            (day_ago, d["contact"])).fetchone()[0]
+            "SELECT COUNT(*) FROM Tickets t JOIN Clients c ON t.ClientId = c.Id "
+            "WHERE t.CreatedAt >= ? AND c.UserId = ?",
+            (day_ago, sender_id)).fetchone()[0]
         if n >= PER_CLIENT_24H:
-            raise Rejected(f"该客户 24 小时内已建 {n} 单")
+            raise Rejected(f"该客户（账号 {sender_id}）24 小时内已建 {n} 单")
 
+        # 同名去重也跟着换成按账号——同理，标题是模型吐的但账号不是
         dup = conn.execute(
-            "SELECT TicketNo FROM Tickets WHERE CreatedAt >= ? "
-            "AND ClientContact = ? AND Title = ?",
-            (day_ago, d["contact"], d["title"])).fetchone()
+            "SELECT t.TicketNo FROM Tickets t JOIN Clients c ON t.ClientId = c.Id "
+            "WHERE t.CreatedAt >= ? AND c.UserId = ? AND t.Title = ?",
+            (day_ago, sender_id, d["title"])).fetchone()
         if dup:
             raise Rejected(f"24 小时内已有同名单 {dup[0]}，不重复建")
     finally:
@@ -166,7 +173,7 @@ def on_reply(bot, sender_id, batch, text, task):
         if not d:
             return
         validate(d)
-        check_quota_and_dup(bot.cfg["db"], d)
+        check_quota_and_dup(bot.cfg["db"], d, sender_id)
         r = create_ticket(bot.cfg, d, sender_id)
         bot.log(f"✅ 开单 {r.get('ticketNo')}（客户 {d['client']} / {d['contact']}）")
         if task:

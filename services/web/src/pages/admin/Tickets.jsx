@@ -255,7 +255,8 @@ function Detail({ id, busy, setBusy, onChanged, toast }) {
                 onClick={saveContent}>保存需求和金额</button>
       </div>
       <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-        金额空着也能开工；但**结单前必须填**，否则财务表对不上而账面看着是好的。
+        金额空着也能开工，但**结单前必须填**。填了只是留个数给你手工记账时对照——
+        系统【不会】拿它和财务表核对，钱这条线目前没有任何自动检查。
       </div>
 
       {/* 动作按钮：完全由后端的 available 决定 */}

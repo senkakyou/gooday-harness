@@ -87,7 +87,11 @@ public class TicketsController(AppDbContext db, DeliveryService delivery,
             $"📋 新订单 {t.TicketNo}\n" +
             $"客户：{(string.IsNullOrWhiteSpace(t.ClientName) ? "—" : t.ClientName)}" +
             $"（{(string.IsNullOrWhiteSpace(t.ClientContact) ? "无联系方式" : t.ClientContact)}）\n" +
-            $"想做：{t.Title}\n\n" +
+            $"想做：{t.Title}\n" +
+            // 【把绑定的账号写进通知】。建单时的 ClientUserId 是第二扇门：
+            // 如意必须能传（她在私信里接待，发信人就是客户），锁不掉。
+            // 锁不掉就让它【可见】——放行前大海看得到这单挂在谁头上。
+            $"挂在客户档案：{(t.ClientId is int cid ? $"#{cid}" : "未关联（线下客户，交付物挂不上）")}\n\n" +
             $"需求原文：\n{t.Description}\n\n" +
             $"—— 价格和细节你跟客户确认，谈好了在后台填金额、点「开工」，" +
             $"或者直接跟我说「{t.TicketNo} 开工」。";
@@ -321,12 +325,30 @@ public class TicketsController(AppDbContext db, DeliveryService delivery,
         var t = await db.Tickets.FindAsync(id);
         if (t == null) return NotFound(new { message = "订单不存在" });
 
+        // ═══ 判据字段只有大海能改（2026-09-10 灵犀评审 ②）═══════════════
+        //
+        //   锁住动作是不够的。start / release / close 都锁给了大海，
+        //   可 **release 判的是 ClientId、close 判的是 Amount**，
+        //   而这个 PUT 只有 [Authorize(Roles="admin,staff")]——
+        //   灵犀是 admin、如意是 staff，两个都进得来。
+        //
+        //   于是那道「只有大海能放行」的闸可以绕过去：
+        //   注入让灵犀改掉 ClientId → 大海照常点放行 → **交付物进了别人账号**。
+        //   闸门本身没被推开，是它判的那个数被换掉了。
+        //
+        //   规则：**谁能推那个动作，谁才能改那个动作读的字段。**
+        var isOwner = CurrentUserId() == TicketWorkflow.OwnerUserId;
+        if (!isOwner && (req.ClientId != null || req.Amount != null))
+            return StatusCode(403, new { message =
+                "客户档案与金额只有大海能改——放行闸判 ClientId、结单闸判 Amount，" +
+                "改得动判据就等于绕得过闸门。" });
+
         var changed = new List<string>();
         if (req.Title != null && req.Title != t.Title)               { t.Title = req.Title; changed.Add("标题"); }
         if (req.Description != null && req.Description != t.Description) { t.Description = req.Description; changed.Add("需求"); }
         if (req.ClientName != null)    { t.ClientName = req.ClientName; changed.Add("客户名"); }
         if (req.ClientContact != null) { t.ClientContact = req.ClientContact; changed.Add("联系方式"); }
-        if (req.ClientId != null)      { t.ClientId = req.ClientId; changed.Add("客户档案"); }
+        if (req.ClientId != null)      { t.ClientId = req.ClientId; changed.Add($"客户档案→#{req.ClientId}"); }
         if (req.Amount != null && req.Amount != t.Amount) { t.Amount = req.Amount; changed.Add($"金额→{req.Amount}"); }
 
         if (changed.Count == 0 && string.IsNullOrWhiteSpace(req.Note))
@@ -382,7 +404,9 @@ public class TicketsController(AppDbContext db, DeliveryService delivery,
         }
 
         if (evt == "close" && t.Amount == null)
-            return BadRequest(new { message = "结单前必须填金额——否则财务表对不上，而账面看着是好的" });
+            return BadRequest(new { message =
+                "结单前必须填金额。注意这道闸只防「忘了填」，不防「填错」——" +
+                "系统不会拿它和财务表核对（见 Models/Ticket.cs）。" });
 
         // 4) 迁移
         var from = t.Status;

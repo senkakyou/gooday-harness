@@ -18,6 +18,12 @@ const ORDER_STATUS = {
   NEW: '待接单', IN_PROGRESS: '开发中', DELIVERED: '待验收',
   CLOSED: '已结单', BLOCKED: '卡住了', CANCELLED: '已取消',
 }
+// 药丸配色。【这一处曾经漏改】：原来写 t.status === 'done'，
+// 而 check.py 的「旧小写状态」判据【故意排除了 done/cancelled】（太通用，一查全是误报）——
+// 也就是说这一类漏改它永远查不到。别把那条判据当网使。
+const ORDER_PILL = {
+  CLOSED: 'st-pill-green', CANCELLED: 'st-pill-muted', BLOCKED: 'st-pill-danger',
+}
 
 const STATUS_MAP = {
   prospect: '潜在',
@@ -289,7 +295,7 @@ function ClientDetailPanel({ clientId, onClose, onUpdated }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
               <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--muted)' }}>{t.ticketNo}</span>
               <span style={{ fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</span>
-              <span className={`st-pill ${t.status === 'done' ? 'st-pill-green' : t.status === 'cancelled' ? 'st-pill-muted' : 'st-pill-blue'}`} style={{ fontSize: 10 }}>
+              <span className={`st-pill ${ORDER_PILL[t.status] || 'st-pill-blue'}`} style={{ fontSize: 10 }}>
                 {ORDER_STATUS[t.status] || t.status}
               </span>
             </div>
