@@ -85,6 +85,7 @@ UPLOADS = "/srv/gooday-harness/media/uploads"
 DAHAI_ID, LINGXI_ID = 1, 20
 MIN_HTML = 800            # 交付物小于这个字节数，基本可以断定是个空壳
 MAX_REVIEW_ROUNDS = 3     # 承自开发铁则：同一个问题连挂 3 次就停下报人工
+MAX_INLINE = 60000        # 贴给评审者的交付物内容上限（字）。单文件网页远小于它
 REVIEW_WAIT_SEC = 1200    # 等灵犀回复的上限（她要真去读代码，不是秒回）
 
 BUILD_PROMPT = os.path.join(HERE, "prompts", "build.md")
@@ -274,27 +275,63 @@ def _send_to_lingxi(text):
         raise OrderError(f"发给灵犀失败：{err}")
 
 
+# ═══ 轮询消息【必须读活库】，不能读那份自举出来的快照 ══════════════════
+#
+#   2026-09-10 第一次真跑时踩了：文件头那段自举把 TOOLVIDEO_DB 指向一份
+#   `.backup` 出来的【冻结快照】（那是给 TokenVersion 用的，静态数据，没问题）。
+#   而这两个函数原来也走 tv.db_path() —— 于是它们在**轮询一个永远不会变的库**。
+#
+#   灵犀其实 70 秒就回了「打回」，格式也完全正确，而 review 等满 20 分钟报
+#   「还没回」。**症状和「她真的慢」长得一模一样**，日志里看不出任何异常。
+#
+#   教训：为一个目的引入的快照，会被另一处代码悄悄当成实时数据源。
+#   凡是要看「刚发生的事」，一律显式读活库。
+def _live_sql(query):
+    """读活库。agent 读不到 docker 卷，走 sudoers 免密的那条 sqlite3。
+
+    ⚠️ 【库路径必须是 sqlite3 之后的第一个参数】。sudoers 里登记的是
+    `/usr/bin/sqlite3 <库路径> *`，第一版在前面塞了 `-separator`，
+    规则匹配不上，直接 "sudo: a password is required"。
+    所以不用任何 flag：多列要分隔就在 SQL 里自己拼，只取单列输出。
+    """
+    r = subprocess.run(["sudo", "-n", "sqlite3", _RUNTIME_DB, query],
+                       capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        raise OrderError(f"读活库失败：{(r.stderr or '').strip()[:200]}")
+    return r.stdout
+
+
 def _lingxi_replies_since(since_id):
-    """取灵犀在 since_id 之后发给大海的消息。"""
-    import sqlite3
-    conn = sqlite3.connect(tv.db_path(), timeout=10)
-    conn.row_factory = sqlite3.Row
-    try:
-        return [dict(r) for r in conn.execute(
-            "SELECT Id, Content FROM PrivateMessages "
-            "WHERE SenderId=? AND ReceiverId=? AND Id>? ORDER BY Id",
-            (LINGXI_ID, DAHAI_ID, since_id)).fetchall()]
-    finally:
-        conn.close()
+    """取灵犀在 since_id 之后发给大海的消息。
+
+    ⚠️ 【自己在 SQL 里拼分隔】：评审意见里必然有 | 和换行，
+    用 sqlite3 的默认 | 分隔会把一条消息切成碎片，
+    然后正则在碎片上永远匹配不到结论行。
+    这里把换行换成 char(1)、行间用 char(30) 分隔，取回来再还原。
+    """
+    out = _live_sql(
+        "SELECT group_concat("
+        "  Id || char(31) || replace(Content, char(10), char(1)), char(30)) "
+        "FROM (SELECT Id, Content FROM PrivateMessages "
+        f" WHERE SenderId={LINGXI_ID} AND ReceiverId={DAHAI_ID} AND Id>{int(since_id)}"
+        " ORDER BY Id)").strip()
+    if not out:
+        return []
+    msgs = []
+    for rec in out.split("\x1e"):
+        if "\x1f" not in rec:
+            continue
+        mid, _, content = rec.partition("\x1f")
+        try:
+            msgs.append({"Id": int(mid), "Content": content.replace("\x01", "\n")})
+        except ValueError:
+            continue
+    return msgs
 
 
 def _max_msg_id():
-    import sqlite3
-    conn = sqlite3.connect(tv.db_path(), timeout=10)
-    try:
-        return conn.execute("SELECT COALESCE(MAX(Id),0) FROM PrivateMessages").fetchone()[0]
-    finally:
-        conn.close()
+    out = _live_sql("SELECT COALESCE(MAX(Id),0) FROM PrivateMessages").strip()
+    return int(out) if out else 0
 
 
 def cmd_review(args):
@@ -314,20 +351,48 @@ def cmd_review(args):
     if not files:
         raise OrderError(f"工作目录 {d} 是空的，没有可评审的东西——先跑 start / build")
 
+    # ═══ 把交付物【内容】贴给她，不是给她一个路径 ═════════════════════
+    #
+    #   2026-09-10 第一次真跑，她回的是「读不到交付物，本轮无法评审」：
+    #   工作目录按 G01 落在 /srv/gooday-harness/work/，而她的会话只放行
+    #   /opt/gooday-harness —— `test -e` 能确认目录存在，内容一个字节读不到。
+    #   **让评审者去读他无权访问的路径，是评审流程的设计错误，不是他的问题。**
+    #
+    #   没走「给她开目录权限」那条路，因为 config.json 归 root、我改不了，
+    #   而把产物拷进仓库是在绕 G01 的精神。贴内容是她自己给的方案，
+    #   并且更稳：**她审的就是将要交付的那些字节**，不是一个可能变动的路径。
+    src_files = [f for f in files if f.endswith((".html", ".md", ".txt", ".py", ".js"))]
+    body_parts = []
+    total = 0
+    for f in src_files:
+        try:
+            txt = open(os.path.join(d, f), encoding="utf-8", errors="replace").read()
+        except OSError as e:
+            body_parts.append(f"\n--- {f} ---\n（读不出来：{e}）")
+            continue
+        if total + len(txt) > MAX_INLINE:
+            body_parts.append(f"\n--- {f} ---\n（{len(txt)} 字，超出内联上限没贴。"
+                              f"在 {os.path.join(d, f)}，要看的话说一声我另想办法）")
+            continue
+        total += len(txt)
+        body_parts.append(f"\n--- {f} ---\n{txt}")
+    inline = "".join(body_parts) if body_parts else "（工作目录里没有可内联的文本文件）"
+
     # 【重入保护】：上一轮已经发出去还没收到结论时，不再重发，直接接着等。
     pending = st.get("pendingReview")
     if not pending:
         since = _max_msg_id()
         _send_to_lingxi(
             f"【订单评审】{tno}「{t['title']}」第 {rounds + 1} 轮\n\n"
-            f"交付物在：{d}\n"
-            f"文件：{'、'.join(files)}\n\n"
-            f"需求原文：\n{(t.get('description') or '')[:1500]}\n\n"
-            f"请自己读那个目录里的东西，对着需求看。只要两种结论之一，"
+            f"需求原文：\n{(t.get('description') or '')}\n\n"
+            f"交付物内容【直接贴在下面】，不用去找文件"
+            f"（原件在 {d}，但那是 /srv 下，你的会话读不到）：\n"
+            f"{inline}\n\n"
+            f"对着需求看。只要两种结论之一，"
             f"并且**最后一行必须是**下面两种格式之一，我按这一行解析：\n"
             f"  评审结论：通过\n"
             f"  评审结论：打回\n"
-            f"打回时把问题逐条写在结论行之前。看不到文件、或需求本身有问题，也算打回并说明。")
+            f"打回时把问题逐条写在结论行之前。需求本身有歧义也算打回并说明。")
         pending = {"since": since, "sentAt": time.time(), "round": rounds + 1}
         st["pendingReview"] = pending
         save_state(st)
@@ -348,6 +413,16 @@ def cmd_review(args):
             save_state(st)
             ev = evidence(tno, f"review-{pending['round']}",
                           {"verdict": verdict, "text": m["Content"]})
+            # 【评审结论要进工作记录，不能只落 evidence】。
+            # 2026-09-10 首次真跑后看时间线才发现：里面只有建单/改需求/迁移，
+            # 看不出「为什么建了两次」——灵犀第 1 轮打回的事实不在订单上，
+            # 只躺在 /var/lib 的证据文件里。工作记录就是给人看这个的。
+            try:
+                api(f"/api/tickets/{t['id']}", method="PUT", body={"note":
+                    f"灵犀第 {pending['round']} 轮评审：{verdict}。"
+                    f"要点：{' '.join((m['Content'] or '').split())[:300]}"})
+            except Exception as e:
+                log(f"⚠️ 评审结论没写进工作记录（不影响本轮结论）：{type(e).__name__}: {e}")
             log(f"{tno} 第 {pending['round']} 轮评审结论：{verdict}（证据 {ev}）")
             if verdict == "通过":
                 return 0
