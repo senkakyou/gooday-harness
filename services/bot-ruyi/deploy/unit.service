@@ -15,7 +15,23 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/gooday-harness
+# ═══ 【这一行是如意「零工具」的真正实现】（2026-09-11 实测后改）════════
+#
+#   config.json 里写着 allowed_tools: [] 「一个工具都不给」。
+#   **那道控制从来没生效过**，而且这套 CLI 的 flag 根本表达不了它：
+#     · --allowedTools 不是排他白名单（实测 __none__ / "" 都挡不住 Read）
+#     · --disallowedTools 是黑名单，禁掉 Read/Bash/Glob/Grep/Edit/Write 之后
+#       模型改用 Monitor 跑 head 把文件读了 —— 没列到的工具就是逃生口
+#
+#   真正有效的是【沙箱的 cwd 范围】：实测从仓库外的空目录跑，
+#   /opt/gooday-harness/.env 和整个仓库都读不到。
+#
+#   所以把她的工作目录挪出仓库。她读到的每句话都来自不可信来源，
+#   而 .env 就在仓库根 —— 一次注入就能让她把 JWT_SECRET 写进回复发给客户。
+#   她的 config/prompt 都走绝对路径（HERE），库和 HTTP 都在 Python 侧，
+#   挪 cwd 不影响任何功能。
+ExecStartPre=/usr/bin/install -d -m 700 /var/lib/gooday-harness/state/bot-ruyi/cwd
+WorkingDirectory=/var/lib/gooday-harness/state/bot-ruyi/cwd
 EnvironmentFile=/opt/gooday-harness/.env
 
 ExecStart=/usr/bin/python3 /opt/gooday-harness/services/{{NAME}}/main.py

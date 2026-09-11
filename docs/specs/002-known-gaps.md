@@ -533,6 +533,59 @@ crontab 那半边是生效的，systemd 这半边被静默撤销了。
 
 ---
 
+## 缺口二十：`allowed_tools` 这道「闸」从来不存在，而配置里写着它存在
+
+2026-09-11 实测发现。**这是本仓库第三次出现同一形状**：
+注释/提示词承诺了一个控制，代码从来没实现它
+（前两次：如意的 `client_context` 是空函数、出口白名单只放行了收没放行发）。
+
+### 事实
+
+1. `services/bot-lingxi/main.py` 里有个 `_model_args()`，拼 `--allowedTools` 和 `--add-dir`。
+   **`runner.py` 调 `mdl.call()` 时从不传 `extra_args`** —— 那个方法没有任何调用方。
+   于是 `allowed_tools` / `extra_dirs` 两份配置自上线起一直是装饰品。
+2. 接通之后又发现：**即使传了也不构成限制**。实测（`claude -p`，prompt 走 stdin）：
+   - `--allowedTools __none__` / `--allowedTools ""` —— 都**挡不住** Read；
+     它是"额外放行"，不是排他白名单。
+   - `--disallowedTools Read,Bash,Glob,Grep,Edit,Write` —— 那六个确实被禁，
+     但模型**改用 `Monitor`** 跑 `head -n 1 README.md` 把内容取到了。
+     **黑名单结构上挡不住：没列到的工具就是逃生口。**
+   - `--permission-mode manual` —— 在 `-p` 模式下也没拦住读文件。
+
+**所以「一个工具都不给」这件事，这套 CLI 的 flag 表达不了。**
+
+### 它会怎么坏（已修）
+
+如意的 `allowed_tools: []` 注释写着「一个工具都不给。它读的每句话都不可信，
+给工具等于把注入直接变成执行」。而她实际有 Read 和 Bash，
+工作目录是仓库根，**`.env` 就在仓库根，她的进程还是 root**。
+
+> 一次 prompt 注入 → 读 `/opt/gooday-harness/.env` → 把 `JWT_SECRET`
+> 写进回复发给客户。而她的出口白名单恰好放行「来找过她的那个人」。
+
+### 修法（已落地）
+
+唯一实测有效的控制是**沙箱的 cwd 范围**：从仓库外的空目录跑，
+`.env` 和整个仓库都读不到（root 身份同样受限——灵犀那个 root 进程
+也确实读不到 `/srv` 和 `/tmp`）。
+
+所以把如意的 `WorkingDirectory` 挪出仓库
+（`/var/lib/gooday-harness/state/bot-ruyi/cwd`，`ExecStartPre` 建出来，0700）。
+她的 config/prompt 走绝对路径、库和 HTTP 在 Python 侧，挪 cwd 不影响功能。
+
+`extra_args` 也接通了（`--add-dir` 是真有效的），并把两份撒谎的注释改成实话——
+**配置谎称有一道闸，比没有这道闸更危险**。
+
+### 还欠着
+
+- 灵犀的 cwd 仍是仓库根（她要评审代码，这是必需的）。她的边界只剩
+  沙箱 cwd + extra_dirs + 她自己 prompt 里的铁则，**没有工具级强制**。
+  要真的限制她的工具，得换机制（独立用户 + 文件系统权限，或 CLI 支持排他白名单）。
+- 判据：`evolution/` 里**没有任何检查器在验「配置声明的控制是否真的生效」**。
+  这一类（注释承诺 ≠ 代码实现）已经出现三次，值得一条门禁。
+
+---
+
 ## 优先级
 
 1. ~~缺口一（Task/Event 无写入方）~~ ✅ 已闭合

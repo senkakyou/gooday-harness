@@ -73,12 +73,24 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
     ///   注意 `POST /api/admin/tools/deliver` 不受影响：它【不从 DTO 取】
     ///   这两个字段，是服务端在过了客户档案闸之后自己设的。
     /// </summary>
-    private IActionResult? RejectDeliveryFieldWrite(int? ownerUserId, int? sourceTicketId)
+    /// <param name="visibility">
+    /// ⚠️ 【第六次换皮，灵犀 2026-09-11 复核 82db78f 时发现】：
+    /// 只传 `Visibility="public"`、不传 `OwnerUserId`，原来会走进
+    /// `NormalizeOwnership(null, vis)` → 返回 `(null, "public")` →
+    /// **`tool.OwnerUserId` 被抹成 null**。
+    /// 一个没锁的字段写到了锁住的字段上，和前几次同一类漏法。
+    /// 后果有两个：客户的私有交付物当场变公开（2026-09-09 那个 bug 的回归路径），
+    /// 且该单**再也放行不了**（`Check()` 要求 OwnerUserId 非空）。
+    /// 所以 Visibility 也要纳入判断。
+    /// </param>
+    private IActionResult? RejectDeliveryFieldWrite(int? ownerUserId, int? sourceTicketId,
+                                                   string? visibility = null)
     {
-        if (ownerUserId is null && sourceTicketId is null) return null;
+        if (ownerUserId is null && sourceTicketId is null && visibility is null) return null;
         if (CurrentUserId == TicketWorkflow.OwnerUserId) return null;
         return StatusCode(403, new { message =
-            "交付物的归属（OwnerUserId）与来源订单（SourceTicketId）只有大海能写——" +
+            "交付物的归属（OwnerUserId）、来源订单（SourceTicketId）、"
+            + "可见性（Visibility）只有大海能写——" +
             "放行闸靠这两个字段判「东西是不是真做出来了」，" +
             "改得动它们就等于能凭空造一件假交付物。" +
             "正常上架请走 POST /api/admin/tools/deliver。" });
@@ -112,7 +124,8 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         // slug 必须唯一（用作 URL 标识符）
         if (await db.Tools.AnyAsync(t => t.Slug==dto.Slug))
             return BadRequest(new { message="Slug已存在" });
-        if (RejectDeliveryFieldWrite(dto.OwnerUserId, dto.SourceTicketId) is IActionResult deny1)
+        if (RejectDeliveryFieldWrite(dto.OwnerUserId, dto.SourceTicketId, dto.Visibility)
+                is IActionResult deny1)
             return deny1;
         var (vurl, vsrc) = NormalizeVideo(dto.VideoUrl);
         if (NormalizeRelDir(dto.Folder, out var folder) is string ferr) return BadRequest(new { message=ferr });
@@ -142,7 +155,8 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         tool.RequireLogin=dto.RequireLogin; tool.ReadmeMarkdown=dto.ReadmeMarkdown;
         tool.IsPaid=dto.IsPaid; tool.Price=dto.Price;
         var (vurl, vsrc) = NormalizeVideo(dto.VideoUrl);
-        if (RejectDeliveryFieldWrite(dto.OwnerUserId, dto.SourceTicketId) is IActionResult deny2)
+        if (RejectDeliveryFieldWrite(dto.OwnerUserId, dto.SourceTicketId, dto.Visibility)
+                is IActionResult deny2)
             return deny2;
         if (NormalizeRelDir(dto.Folder, out var folder) is string ferr) return BadRequest(new { message=ferr });
         tool.VideoUrl=vurl; tool.VideoSource=vsrc;
@@ -151,9 +165,17 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         // toBody()/openEdit() 根本不带它们——无条件覆写的后果是：
         // 站长在后台点一下「上架」，客户的私有交付物当场被抹掉归属、变成站方公开工具，
         // 挂到首页上，而且不报错、没日志。（2026-09-09 灵犀评审第 1 条，上线后当天发现）
-        if (dto.OwnerUserId is not null || dto.Visibility is not null) {
+        // 【两个字段分开处理，绝不用 `||` 合成一个条件】。
+        // 原来是 `if (OwnerUserId is not null || Visibility is not null)` 共用一个分支，
+        // 于是只传 Visibility 时 NormalizeOwnership(null, vis) 把归属抹成了 null
+        // —— 调用方改的是 A，被改的是 B（灵犀 2026-09-11 发现）。
+        if (dto.OwnerUserId is not null) {
             var (owner, vis) = NormalizeOwnership(dto.OwnerUserId, dto.Visibility);
             tool.OwnerUserId = owner;
+            tool.Visibility = vis;
+        } else if (dto.Visibility is not null) {
+            // 只改可见性：**不碰归属**，但仍要守住「没归属人的一律 public」这条不变量
+            var (_, vis) = NormalizeOwnership(tool.OwnerUserId, dto.Visibility);
             tool.Visibility = vis;
         }
         if (dto.SourceTicketId is not null) tool.SourceTicketId = dto.SourceTicketId;

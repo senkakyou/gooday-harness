@@ -18,7 +18,7 @@
     "Glob",
     "Grep"
   ],
-  "_allowed_tools": "工具权限走配置不写死在代码里：不同环境该给的权限不同，而且改权限应该是一次可 review 的配置变更。收紧时把不需要的删掉即可。注意 WebFetch/WebSearch 已默认移除——它们会把外部不可信内容直接引入一个有 Bash 的会话。",
+  "_allowed_tools": "⚠️【这个字段不是一道闸，2026-09-11 实测确认】。--allowedTools 不是排他白名单，传了也挡不住没列的工具；--disallowedTools 是黑名单、有逃生口（禁掉六个工具后模型用 Monitor 绕过）。所以这里列的六个是【意图声明】，不是强制。原注释说『WebFetch/WebSearch 已默认移除』—— **那句是假的**，它们一直可用。灵犀的实际边界只有两样：沙箱的 cwd + extra_dirs，以及她自己 prompt 里的铁则。",
   "db": "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db",
   "api_base": "https://localhost",
   "model": "opus",

@@ -75,6 +75,45 @@ class Bot:
         with open(p, encoding="utf-8") as f:
             return {k: v for k, v in json.load(f).items() if not k.startswith("_")}
 
+    def _model_args(self):
+        """拼给 claude CLI 的额外参数。
+
+        ═══ 这套配置【从来没有生效过】（2026-09-11 实测发现）════════════
+        
+          原来这个方法只定义在 services/bot-lingxi/main.py 里，
+          而 runner 调 mdl.call() 时**从不传 extra_args** ——
+          也就是说它是个【没有任何调用方的方法】。
+          于是 config.json 里的 allowed_tools 和 extra_dirs 两份配置
+          三天来一直是装饰品，而 bot-lingxi/config.json 的注释写着
+          「工具权限走配置不写死在代码里……改权限应该是一次可 review 的配置变更」。
+        
+          **提示词/注释承诺了一个控制，代码从来没实现它** —— 这是本项目
+          第三次出现同一形状（前两次：如意的 client_context 是空函数、
+          出口白名单只放行了收没放行发）。
+        
+          现在接通了。但要把实测结论一并写在这里，免得下一个人又以为它是道闸：
+        
+          · `--add-dir`（extra_dirs）**真的有效**，扩大可访问目录。
+          · `--allowedTools`（allowed_tools）**不是排他白名单**。
+            实测：`--allowedTools __none__` 和 `--allowedTools ""` 都挡不住 Read。
+            它只是"额外放行"，不构成限制。
+          · `--disallowedTools` 是黑名单，**结构上挡不住**：实测把
+            Read,Bash,Glob,Grep,Edit,Write 全禁掉之后，模型改用 `Monitor`
+            跑 `head -n 1 README.md` 把内容取到了。**没列到的工具就是逃生口。**
+        
+          所以「一个工具都不给」这件事**这套 CLI 的 flag 表达不了**。
+          真正有效的控制是【沙箱的 cwd 范围】：实测从仓库外的空目录跑，
+          /opt/gooday-harness/.env 和整个仓库都读不到。
+          因此如意的 unit 把 WorkingDirectory 挪出了仓库（见她的 deploy/unit.service）。
+        """
+        args = []
+        tools = self.cfg.get("allowed_tools", [])
+        if tools:
+            args += ["--allowedTools", ",".join(tools)]
+        for d in self.cfg.get("extra_dirs", []):
+            args += ["--add-dir", d]
+        return args
+
     def system_prompt(self):
         """从 prompt.md 读。HTML 注释是给人看的说明，剥掉再送模型。"""
         with open(os.path.join(self.here, "prompt.md"), encoding="utf-8") as f:
@@ -261,7 +300,8 @@ class Bot:
 
                 text, ok, err = mdl.call(prompt, sysp, tag=self.name,
                                          model=self.cfg.get("model"),
-                                         timeout=self.cfg.get("timeout_sec", 300))
+                                         timeout=self.cfg.get("timeout_sec", 300),
+                                         extra_args=self._model_args())
                 if not ok:
                     if mdl.is_infra_error(err):
                         # 基础设施问题单独报 P0：不这样分的话，

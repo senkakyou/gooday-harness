@@ -43,18 +43,9 @@ FACTS = (
 class LingxiBot(Bot):
     """带工具权限的 bot：调模型时要把 allowedTools 传下去。"""
 
-    def _model_args(self):
-        args = []
-        tools = self.cfg.get("allowed_tools", [])
-        if tools:
-            args += ["--allowedTools", ",".join(tools)]
-        # 额外可访问目录。默认只有服务的工作目录（仓库根），
-        # 而有些任务的对象天然在仓库外（演练副本、日志目录）。
-        # **写在 config 里而不是硬编码**：谁能碰哪些目录要看得见、可审计，
-        # 加一个目录是改配置，不是改代码。
-        for d in self.cfg.get("extra_dirs", []):
-            args += ["--add-dir", d]
-        return args
+    # _model_args 已提到 packages/botkit/runner.py 的基类（2026-09-11）。
+    # 【原来它只定义在这里，而 runner 从不调用它】——allowed_tools 和 extra_dirs
+    # 两份配置因此一直是装饰品。基类那个方法的注释里记了完整的实测结论。
 
 
 def coo_context(cfg):

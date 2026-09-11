@@ -7,7 +7,7 @@
   "may_send_to": [],
   "_may_send_to": "【运行时按发送者动态放行，只回复来找它的那个人】。绝不主动给未联系过的人发消息——那是骚扰，也是注入被利用后最想做的事。",
   "allowed_tools": [],
-  "_allowed_tools": "【一个工具都不给】。它读的每句话都不可信，给工具等于把注入直接变成执行。",
+  "_allowed_tools": "⚠️【这个字段不是一道闸，2026-09-11 实测确认】。它最终变成 claude CLI 的 --allowedTools，而那个 flag 不是排他白名单——传 __none__ 或空串都挡不住 Read；--disallowedTools 是黑名单，禁掉 Read/Bash/Glob/Grep/Edit/Write 后模型改用 Monitor 跑 head 照样读到文件。**这套 CLI 的 flag 表达不了「一个工具都不给」。**如意的真实防线是 deploy/unit.service 里把 WorkingDirectory 挪出了仓库——沙箱是 cwd 范围的，实测从仓库外跑读不到 .env 和任何仓库文件。改这个字段【不会】改变她的实际能力，别把它当控制。",
   "db": "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db",
   "api_base": "https://localhost",
   "model": "opus",
