@@ -7,7 +7,7 @@
 import sqlite3, json, time, os, hmac, hashlib, base64
 import sys
 import urllib.request, ssl
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 DB_PATH   = "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db"
 API_BASE  = "https://localhost"
@@ -107,12 +107,38 @@ def send_message_safe(receiver_id, content, token):
                      tag="daily-report")
 
 
+# 躺多久算「躺着不动」。大海 2026-09-11 定的：一天。
+#
+# 【为什么必须有这一项】：v2 删掉了所有自动流转（docs/decisions/006），
+# 好处是没有诈尸、没有抢单、没有看门狗误伤；代价是**没人推的单会一直躺着**。
+# 上线时这条缺口是明确欠着的——现在补上。
+#
+# 放在日报里而不是 patrol 里，是因为 patrol 只把发现写进证据链、不给人发消息，
+# 而这件事的要求是「让灵犀提醒我」。日报本来就是灵犀每天发给大海的。
+# 躺着的单每天都会再出现一次，这是刻意的：提醒一次就忘，等于没提醒。
+STALE_DAYS = 1
+
 # 只管怎么显示。【状态本身的真源在 API 的 TicketWorkflow】——
 # 这里多一个键少一个键都不影响判断，因为下面用的是 .get(k, k) 兜底。
 STATUS_LABELS = {
     "NEW": "待接单", "IN_PROGRESS": "开发中", "DELIVERED": "待验收",
     "CLOSED": "已结单", "BLOCKED": "卡住了", "CANCELLED": "已取消",
 }
+
+
+def _parse_ts(s):
+    """解析时间戳。API 返回 ISO（带 T、可能带 Z 和微秒），库里是空格分隔。
+    【解析不出来要返回 None 而不是当成"很久以前"】——否则格式一变，
+    全部单子都会被判成躺着不动，日报天天喊狼来了，然后就没人看了。"""
+    if not s:
+        return None
+    t = str(s).replace("T", " ").replace("Z", "").strip()
+    if "." in t:
+        t = t.split(".")[0]
+    try:
+        return datetime.strptime(t[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def build_report(ticket_data, finance_data):
@@ -145,6 +171,26 @@ def build_report(ticket_data, finance_data):
             lines.append(f"  …共 {len(active)} 条在跑")
     else:
         lines.append("  暂无在跑的订单")
+
+    # ── 躺着不动的单（大海亲自要的提醒）──
+    # 【只看 UpdatedAt，不看 CreatedAt】：客户补充需求、大海改金额都会刷新它，
+    # 按建单时间算的话，一张正在来回沟通的单也会被当成「没人管」。
+    stale = []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=STALE_DAYS)
+    for t in active:
+        if t.get("status") != "NEW":
+            continue
+        ts = _parse_ts(t.get("updatedAt") or t.get("createdAt"))
+        if ts is not None and ts < cutoff:
+            stale.append((t, (datetime.now(timezone.utc) - ts).days))
+    if stale:
+        lines.append("")
+        lines.append(f"**⚠️ 这些单躺着没动超过 {STALE_DAYS} 天，等你拍**")
+        for t, days in sorted(stale, key=lambda x: -x[1]):
+            lines.append(f"  [{t['ticketNo']}] {t['title']} —— 躺了 {days} 天"
+                         f"（客户 {t.get('clientName') or '—'}）")
+        lines.append("  → 跟客户确认细节和价格后，在 /admin/tickets 填金额、点「开工」；"
+                     "不做就点「取消订单」。")
 
     # ── 财务（本月） ──
     f = finance_data

@@ -200,6 +200,34 @@ def main():
 
 
 
+    print("=== 4.7 交付物的归属与来源单也只有大海能写（known-gaps 缺口十九）===")
+    # 放行闸认定「哪件是本单交付物」靠 SourceTicketId、「归属对不对」靠 OwnerUserId。
+    # 这两个写入口原来只认 role=admin —— 灵犀进得来，就能凭空造一件假交付物
+    # 让那道硬闸对空交付放行。她的原话：测试能造，攻击就能造。
+    # 【只用灵犀测这一组】。如意是 staff，而 AdminController 整个类是
+    # [Authorize(Roles="admin")] —— 她的 403 是角色拦截（空 body），
+    # 根本到不了我这道守卫。拿她来测等于什么都没测，
+    # 而第一版我真这么写了，于是「不带字段仍能建普通工具」那条当场红——
+    # 红得对：她本来就建不了任何工具。
+    st, r = req("/api/admin/tools", lingxi_tok, "POST", {
+        "name": "e2e越权交付物", "slug": "e2e-bad-lingxi", "description": "x",
+        "category": "定制", "iconEmoji": "🧪", "isOnline": False, "onlineUrl": None,
+        "hasDownload": False, "downloadFileName": None, "isPublished": False,
+        "requireLogin": True, "readmeMarkdown": None,
+        "ownerUserId": 7, "sourceTicketId": tid})
+    show("灵犀带 ownerUserId/sourceTicketId 建工具 → 403", st == 403, f"HTTP {st}")
+    show("  403 来自我的守卫而不是角色拦截（角色拦截是空 body）",
+         "只有大海能写" in (r.get("message") or ""), (r.get("message") or "(空 body)")[:36])
+    st, r = req("/api/admin/tools", lingxi_tok, "POST", {
+        "name": "e2e普通工具", "slug": "e2e-plain", "description": "x",
+        "category": "工具", "iconEmoji": "🔧", "isOnline": False, "onlineUrl": None,
+        "hasDownload": False, "downloadFileName": None, "isPublished": False,
+        "requireLogin": False, "readmeMarkdown": None})
+    show("不带那两个字段时灵犀仍能建普通工具（没伤到正常路径）", st == 200, f"HTTP {st}")
+    plain_id = (r or {}).get("id")
+    if plain_id:
+        req(f"/api/admin/tools/{plain_id}", owner_tok, "DELETE")
+
     print("=== 5. 非法迁移要 409，且要说清此刻能做什么 ===")
     st, r = req(f"/api/tickets/{tid}/transition", owner_tok, "POST", {"event": "close"})
     show("NEW 直接 close → 409", st == 409, f"HTTP {st} {r.get('message', '')}")

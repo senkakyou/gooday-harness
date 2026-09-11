@@ -29,7 +29,12 @@
   "_username": "签 JWT 用。必须与库里 Users.Username 一致。",
   "_mode": "",
   "extra_dirs": [
+    "/srv/gooday-harness/work",
+    "/srv/gooday-harness/media",
+    "/srv/gooday-harness/backups",
+    "/var/lib/gooday-harness",
+    "/var/log/gooday-harness",
     "/tmp/blind-a1"
   ],
-  "_extra_dirs": "额外可访问目录（--add-dir）。默认只有服务工作目录。加目录是改配置不是改代码，谁能碰哪儿看得见、可审计。"
+  "_extra_dirs": "大海 2026-09-11：「给灵犀加满权限，她代表着我」。这里加满的是【本系统自己的目录】：交付物、产物、备份、证据链、日志。她的进程以 root 跑（unit 里没有 User=），所以这个沙箱白名单是唯一的实际控制——写进来的目录她就真能读写。【刻意没加两样，见 docs/decisions/006 与 known-gaps 缺口十九】：① 运行库所在的 docker 卷目录——给了等于给她绕过所有 API 闸门直接改库的能力；② WebFetch/WebSearch 不在 allowed_tools 里——它们会把外部不可信内容引入一个有 Bash 的会话，这条是注入防线不是权限吝啬。这两样要加，由大海单独拍。"
 }

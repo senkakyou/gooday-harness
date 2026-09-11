@@ -53,6 +53,37 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
     // 有归属人的默认 private（客户交付物）。
     // 【默认值只在这一处定】——散在建/改两处的话，改一处漏一处的表现是
     // "编辑一下客户的工具，它就变公开了"
+    /// <summary>
+    /// `OwnerUserId` / `SourceTicketId` 只有大海能写。返回非 null 表示该拦。
+    ///
+    /// ═══ 判据的第五次换皮（known-gaps 缺口十九 · 灵犀 2026-09-10 指出）═══
+    ///
+    ///   放行闸（DeliveryService.BlockReleaseReasonAsync）里唯一由代码判的
+    ///   那条是「东西是不是真做出来了」。而它认定**哪件是本单交付物**靠
+    ///   `SourceTicketId`，认定**归属对不对**靠 `OwnerUserId`。
+    ///
+    ///   这两个写入口原来只认 role=admin —— 灵犀的 JWT 角色就是 admin。
+    ///   凭空造一件 `SourceTicketId=X` + `OwnerUserId=本单客户` + 三样齐的工具，
+    ///   那道硬闸就对一个**空交付**放行。
+    ///
+    ///   灵犀那句话是这条的最好说明：
+    ///   **「你的 e2e 7.1 用的正是这个手法——测试能造，攻击就能造。」**
+    ///   能被测试便宜地伪造的东西，也能被攻击便宜地伪造。
+    ///
+    ///   注意 `POST /api/admin/tools/deliver` 不受影响：它【不从 DTO 取】
+    ///   这两个字段，是服务端在过了客户档案闸之后自己设的。
+    /// </summary>
+    private IActionResult? RejectDeliveryFieldWrite(int? ownerUserId, int? sourceTicketId)
+    {
+        if (ownerUserId is null && sourceTicketId is null) return null;
+        if (CurrentUserId == TicketWorkflow.OwnerUserId) return null;
+        return StatusCode(403, new { message =
+            "交付物的归属（OwnerUserId）与来源订单（SourceTicketId）只有大海能写——" +
+            "放行闸靠这两个字段判「东西是不是真做出来了」，" +
+            "改得动它们就等于能凭空造一件假交付物。" +
+            "正常上架请走 POST /api/admin/tools/deliver。" });
+    }
+
     private static (int? Owner, string Visibility) NormalizeOwnership(int? owner, string? vis)
     {
         if (owner is null or <= 0) return (null, "public");
@@ -81,6 +112,8 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         // slug 必须唯一（用作 URL 标识符）
         if (await db.Tools.AnyAsync(t => t.Slug==dto.Slug))
             return BadRequest(new { message="Slug已存在" });
+        if (RejectDeliveryFieldWrite(dto.OwnerUserId, dto.SourceTicketId) is IActionResult deny1)
+            return deny1;
         var (vurl, vsrc) = NormalizeVideo(dto.VideoUrl);
         if (NormalizeRelDir(dto.Folder, out var folder) is string ferr) return BadRequest(new { message=ferr });
         var tool = new Tool { Name=dto.Name,Slug=dto.Slug,Description=dto.Description,
@@ -109,6 +142,8 @@ public class AdminController(AppDbContext db, IWebHostEnvironment env, Notificat
         tool.RequireLogin=dto.RequireLogin; tool.ReadmeMarkdown=dto.ReadmeMarkdown;
         tool.IsPaid=dto.IsPaid; tool.Price=dto.Price;
         var (vurl, vsrc) = NormalizeVideo(dto.VideoUrl);
+        if (RejectDeliveryFieldWrite(dto.OwnerUserId, dto.SourceTicketId) is IActionResult deny2)
+            return deny2;
         if (NormalizeRelDir(dto.Folder, out var folder) is string ferr) return BadRequest(new { message=ferr });
         tool.VideoUrl=vurl; tool.VideoSource=vsrc;
         tool.VideoDuration=Math.Max(0,dto.VideoDuration); tool.Folder=folder;
