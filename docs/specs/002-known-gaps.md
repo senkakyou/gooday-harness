@@ -496,6 +496,43 @@ crontab 那半边是生效的，systemd 这半边被静默撤销了。
 
 ---
 
+## 缺口十九：判据的第五次换皮 —— `Tools.OwnerUserId` / `SourceTicketId` 没锁
+
+2026-09-10 灵犀第三轮复审指出，判为不阻塞（v2 之前就存在，不是那次重构引入）。
+
+放行闸（`DeliveryService.BlockReleaseReasonAsync`）里唯一由代码判的那条是
+「东西是不是真做出来了」：有交付物、归属对、已发布、三样齐。
+而它认定「哪件是本单交付物」的依据是 `Tools.SourceTicketId`，
+认定归属的依据是 `Tools.OwnerUserId`。
+
+**这两个字段的写入口只认 `role=admin`**（`POST` / `PUT /api/admin/tools`
+的 `ToolDto` 直接接受 `OwnerUserId` 与 `SourceTicketId`），而灵犀的 JWT 角色就是 admin。
+
+**它会怎么坏**：凭空造一件
+`SourceTicketId=X` + `OwnerUserId=本单客户` + 在线/下载文件存在 + 视频外链
+的工具，那道硬闸就对一个**空交付**放行。
+
+灵犀那句话是这条缺口最好的说明：
+
+> **你的 e2e 7.1 用的正是这个手法——测试能造，攻击就能造。**
+
+`evolution/experiments/order-mainline/e2e.py` 的 7.1 为了复现「ClientId 为 null
+仍被拦」，确实就是这么造出一件三样齐的假交付物的（视频走外链，零渲染成本）。
+**能被测试便宜地伪造的东西，也能被攻击便宜地伪造。**
+
+**怎么修**（下一单）：把 `OwnerUserId` / `SourceTicketId` 的写入收成 owner-only，
+或者让放行闸不信任这两个字段——改为只认 `deliver` 端点建立的归属链
+（那条路径有「没客户档案就 400」的硬闸）。
+前者一行，后者更彻底。
+
+**规则第五次重复，写在这里当模板**（前四次见 docs/decisions/006）：
+
+> **锁住动作是不够的。判据字段、以及判据沿路读到的字段，都要和动作同权限。**
+> 每次以为收口了，都还有下一跳。查法：从闸门的判断条件出发，
+> 把它读到的每一个字段往上追到写入口，逐个问「谁能写这里」。
+
+---
+
 ## 优先级
 
 1. ~~缺口一（Task/Event 无写入方）~~ ✅ 已闭合
