@@ -77,17 +77,31 @@ public class DeliveryService(AppDbContext db, IWebHostEnvironment env)
         if (tool == null)
             return "交付不达标：工具一览里没有这张订单的交付物（交付=上架一件归属客户的工具）";
 
+        // ═══ 没关联客户档案 = 整条归属校验不执行（2026-09-10 灵犀复审 ①）═══
+        //
+        //   下面两条判据都挂在 ClientId 非空上：ClientId 为 null 时
+        //   `clientUserId != null` 假、`t.ClientId != null` 也假，
+        //   **两条全被跳过**，直接落到「已发布 + 三样齐」就放行了。
+        //
+        //   而【匿名网页表单建的单恒为 ClientId = null】——那是主拉新入口。
+        //   AdminController 的 deliver 端点有一道「没客户档案就 400」的硬闸，
+        //   但它不是唯一入口：admin 可以直接 POST /api/admin/tools 自带
+        //   SourceTicketId + OwnerUserId，ForTicketAsync 照样认它是本单交付物。
+        //   **两处入口口径不一致，宽的那处就是实际口径。**
+        if (t.ClientId == null)
+            return "交付不达标：这张订单没有关联客户档案（网页表单进来的单默认没有），"
+                 + "交付物挂不到具体的人，不能放行。先在订单里绑定客户。";
+
         // Tickets.ClientId → Clients.Id → Clients.UserId → 才能和 Tools.OwnerUserId 比
-        int? clientUserId = t.ClientId == null ? null
-            : await db.Clients.Where(c => c.Id == t.ClientId)
-                              .Select(c => c.UserId).FirstOrDefaultAsync();
+        int? clientUserId = await db.Clients.Where(c => c.Id == t.ClientId)
+                                            .Select(c => c.UserId).FirstOrDefaultAsync();
 
         if (clientUserId != null && tool.OwnerUserId != clientUserId)
             return $"交付不达标：交付物挂在用户#{tool.OwnerUserId} 名下，"
                  + $"不是本单客户（客户档案#{t.ClientId} → 用户#{clientUserId}）";
 
         // 客户档案存在但没绑账号（线下客户）：交付物挂不到谁名下，不能自动放行
-        if (t.ClientId != null && clientUserId == null)
+        if (clientUserId == null)
             return $"交付不达标：客户档案#{t.ClientId} 没有绑定平台账号，交付物挂不到他名下";
 
         if (!tool.IsPublished)

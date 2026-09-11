@@ -91,7 +91,7 @@ public class TicketsController(AppDbContext db, DeliveryService delivery,
             // 【把绑定的账号写进通知】。建单时的 ClientUserId 是第二扇门：
             // 如意必须能传（她在私信里接待，发信人就是客户），锁不掉。
             // 锁不掉就让它【可见】——放行前大海看得到这单挂在谁头上。
-            $"挂在客户档案：{(t.ClientId is int cid ? $"#{cid}" : "未关联（线下客户，交付物挂不上）")}\n\n" +
+            $"挂在客户档案：{(t.ClientId is int cid ? $"#{cid}" : "未关联 —— 这单现在放行不了，要先绑客户")}\n\n" +
             $"需求原文：\n{t.Description}\n\n" +
             $"—— 价格和细节你跟客户确认，谈好了在后台填金额、点「开工」，" +
             $"或者直接跟我说「{t.TicketNo} 开工」。";

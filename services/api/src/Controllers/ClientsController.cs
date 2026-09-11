@@ -146,12 +146,39 @@ public class ClientsController(AppDbContext db) : ControllerBase
         });
     }
 
+    /// <summary>
+    /// Clients.UserId 只有大海能写。
+    ///
+    /// ═══ 为什么它是判据字段（2026-09-10 灵犀复审 ②）═══════════════════
+    ///
+    ///   放行闸判的是 Tickets.ClientId，但它【沿路读到的】是
+    ///   Clients.UserId —— DeliveryService 靠 ClientId → Clients.UserId
+    ///   → 比 Tools.OwnerUserId。所以 Clients.UserId 也是判据的一部分。
+    ///
+    ///   不锁的后果：拿一条线下客户档案（UserId 为空，放行闸本该拦），
+    ///   用 upsert 按 Contact 匹配把 UserId 补写成攻击者账号
+    ///   （而 Contact 从 GET /api/tickets 就读得到），
+    ///   放行闸当场从「没绑账号，拦」翻成通过。
+    ///   **Tickets.ClientId 一个字没动，大海通知里的 #C 也没变，全程零信号。**
+    ///
+    ///   规则贯彻到底：**判据字段包括判据沿路读到的字段。**
+    /// </summary>
+    private bool CanWriteUserId()
+        => int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var u)
+           && u == TicketWorkflow.OwnerUserId;
+
+    private IActionResult? RejectUserIdWrite()
+        => StatusCode(403, new { message =
+            "客户档案的账号绑定（UserId）只有大海能改——放行闸沿着它判交付物归属，" +
+            "改得动它就等于绕得过闸门。" });
+
     // ---- POST /api/clients —— 创建客户 ----
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateClientReq req)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { message = "客户姓名不能为空" });
+        if (req.UserId != null && !CanWriteUserId()) return RejectUserIdWrite()!;
 
         var client = new Client
         {
@@ -182,6 +209,9 @@ public class ClientsController(AppDbContext db) : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { message = "客户姓名不能为空" });
+        // 【建和补写都要拦】：upsert 的 UserId 既可能用于新建，
+        // 也可能用于给已有档案补写空的 UserId ——后者才是那条攻击路径。
+        if (req.UserId != null && !CanWriteUserId()) return RejectUserIdWrite()!;
 
         // 按联系方式去重（精确匹配非空 contact）
         Client? existing = null;

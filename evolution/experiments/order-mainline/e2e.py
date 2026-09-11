@@ -22,6 +22,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 
 REPO = "/opt/gooday-harness"
 sys.path.insert(0, os.path.join(REPO, "packages", "botkit"))
@@ -35,7 +36,7 @@ DB = "/var/lib/docker/volumes/gooday_gooday_data/_data/gooday.db"
 _TMPDIR = tempfile.mkdtemp(prefix="gooday-e2e-")
 SCRATCH = os.path.join(_TMPDIR, "tokens.db")
 
-OWNER, RUYI = 1, 23
+OWNER, RUYI, LINGXI = 1, 23, 20
 
 ok_all = True
 made = []          # 造出来的订单 id，最后清掉
@@ -85,8 +86,12 @@ def mint_tokens():
     # 【不要 chmod】：备份是 root 建的，agent 改不了权限（会 EPERM），
     # 而 sqlite3 建出来本来就是 0644，读得到。第一版加了这行，
     # 于是整个脚本在第 0 步就崩了——多做一步不需要的事，多一个失败点。
+    # 【必须签灵犀那一路】（灵犀复审的不阻塞项）：她是 role=admin 但不是 owner，
+    # 而威胁模型里的角色正是她——有 Bash、读不可信私信。
+    # 只测 staff 的话，"admin 但非 owner" 这条路径一次都没跑到。
     return (auth.make_token(OWNER, "admin", "admin", SCRATCH),
-            auth.make_token(RUYI, "如意", "staff", SCRATCH))
+            auth.make_token(RUYI, "如意", "staff", SCRATCH),
+            auth.make_token(LINGXI, "灵犀", "admin", SCRATCH))
 
 
 NEED = ("扫描指定目录下所有 .cs 源码文件，统计总行数并按文件降序排行，"
@@ -95,7 +100,7 @@ NEED = ("扫描指定目录下所有 .cs 源码文件，统计总行数并按文
 
 def main():
     print("=== 0. 准备 ===")
-    owner_tok, ruyi_tok = mint_tokens()
+    owner_tok, ruyi_tok, lingxi_tok = mint_tokens()
     show("签出 token", bool(owner_tok and ruyi_tok))
 
     msg_before = int(sql("SELECT COUNT(*) FROM PrivateMessages WHERE ReceiverId=1") or 0)
@@ -169,8 +174,31 @@ def main():
     show("如意改 Amount → 403", st == 403, f"HTTP {st}")
     st, r = req(f"/api/tickets/{tid}", ruyi_tok, "PUT", {"description": NEED + "（如意补充的细节）"})
     show("但如意仍能改需求正文（她的本职）", st == 200, f"HTTP {st} {r.get('changed')}")
+    # 灵犀是 role=admin 但不是 owner —— 这一路才是威胁模型里的角色
+    st, r = req(f"/api/tickets/{tid}", lingxi_tok, "PUT", {"clientId": 99})
+    show("灵犀（admin 但非 owner）改 ClientId → 403", st == 403, f"HTTP {st}")
+    st, r = req(f"/api/tickets/{tid}", lingxi_tok, "PUT", {"amount": 1})
+    show("灵犀改 Amount → 403", st == 403, f"HTTP {st}")
     _, cur = req(f"/api/tickets/{tid}", owner_tok)
     show("ClientId 没有被改动", cur.get("clientId") is None, str(cur.get("clientId")))
+
+    print("=== 4.6 Clients.UserId 也是判据字段（灵犀复审 ②）===")
+    # 放行闸沿着 Tickets.ClientId → Clients.UserId 判归属，
+    # 所以 Clients.UserId 也是判据的一部分，不锁就能从旁边把闸翻过来。
+    for who, tk in (("如意", ruyi_tok), ("灵犀", lingxi_tok)):
+        st, r = req("/api/clients", tk, "POST",
+                    {"name": "e2e越权建档", "contact": "wechat e2e_test_x",
+                     "contactType": "wechat", "userId": 7})
+        show(f"{who} 带 userId 建客户档案 → 403", st == 403, f"HTTP {st}")
+        st, r = req("/api/clients/upsert", tk, "POST",
+                    {"name": "e2e越权绑定", "contact": "wechat e2e_test_x",
+                     "contactType": "wechat", "userId": 7})
+        show(f"{who} 用 upsert 补写 userId → 403", st == 403, f"HTTP {st}")
+    st, r = req("/api/clients/upsert", ruyi_tok, "POST",
+                {"name": "e2e正常建档", "contact": "wechat e2e_test_y", "contactType": "wechat"})
+    show("不带 userId 时如意仍能建档（她的本职）", st == 200, f"HTTP {st}")
+
+
 
     print("=== 5. 非法迁移要 409，且要说清此刻能做什么 ===")
     st, r = req(f"/api/tickets/{tid}/transition", owner_tok, "POST", {"event": "close"})
@@ -191,9 +219,59 @@ def main():
     show("大海 start → IN_PROGRESS", st == 200 and r.get("to") == "IN_PROGRESS",
          f"HTTP {st} {r.get('message', r)}")
 
-    print("=== 7. 交付闸：没有交付物不许放行 ===")
+    print("=== 7. 交付闸 ===")
     st, r = req(f"/api/tickets/{tid}/transition", owner_tok, "POST", {"event": "release"})
-    show("没有交付物时 release 被拦", st == 400, r.get("message", "")[:70])
+    show("没有交付物 → 被拦", st == 400, r.get("message", "")[:40])
+
+    # ═══ 7.1 复现灵犀复审 ① 描述的那条攻击路径 ════════════════════════
+    #
+    #   【第一版这条测试是假的】：我拿一张连交付物都没有的单去 release，
+    #   它在 `tool == null` 那条就被拦了，**压根没走到 ClientId 判据**，
+    #   而断言「理由是没关联客户档案」当场变红——红得对，测试写错了。
+    #
+    #   她描述的场景必须凑齐两个条件：ClientId 为 null（匿名表单建的单就是）
+    #   **且交付物已经三样齐**。admin 可以直接 POST /api/admin/tools
+    #   自带 SourceTicketId + OwnerUserId，绕开 deliver 端点那道客户档案闸。
+    #   视频允许外链，所以三样齐不需要真渲染，这条测试很便宜。
+    _, tk = req(f"/api/tickets/{tid}", owner_tok)
+    tno_a = tk["ticketNo"]
+    updir = f"/srv/gooday-harness/media/uploads/private/{tno_a}"
+    os.makedirs(updir, exist_ok=True)
+    with open(os.path.join(updir, "x.html"), "w", encoding="utf-8") as f:
+        f.write("<!doctype html><html><body>e2e 假交付物</body></html>")
+    with zipfile.ZipFile(os.path.join(updir, "x.zip"), "w") as z:
+        z.writestr("readme.txt", "e2e")
+    st, tool = req("/api/admin/tools", owner_tok, "POST", {
+        "name": "e2e 越权交付物", "slug": f"e2e-{tno_a.lower()}",
+        "description": "e2e", "category": "定制", "iconEmoji": "🧪",
+        "isOnline": True, "onlineUrl": f"/uploads/private/{tno_a}/x.html",
+        "hasDownload": True, "downloadFileName": f"private/{tno_a}/x.zip",
+        "isPublished": True, "requireLogin": True, "readmeMarkdown": None,
+        "videoUrl": "https://www.bilibili.com/video/BV1xx", "videoDuration": 60,
+        "ownerUserId": 7, "visibility": "private", "sourceTicketId": tid})
+    tool_id = tool.get("id") or tool.get("toolId")
+    st2, dstat = req(f"/api/admin/tools/deliver/{tid}", owner_tok)
+    show("  前置：交付物三样已齐（否则这条测不到 ClientId 判据）",
+         dstat.get("complete") is True, f"missing={dstat.get('missing')}")
+    st, r = req(f"/api/tickets/{tid}/transition", owner_tok, "POST", {"event": "release"})
+    show("  ClientId 为 null + 三样齐 → 仍然被拦（灵犀复审 ①）", st == 400,
+         r.get("message", "")[:40])
+    show("  理由确实是「没有关联客户档案」",
+         "没有关联客户档案" in r.get("message", ""), r.get("message", "")[:44])
+    _, cur = req(f"/api/tickets/{tid}", owner_tok)
+    show("  订单没被推到 DELIVERED", cur["status"] == "IN_PROGRESS", cur["status"])
+    n_notify = sql(f"SELECT COUNT(*) FROM PrivateMessages WHERE ReceiverId=7 "
+                   f"AND Content LIKE '%[交付单#{tool_id}]%'")
+    show("  客户一条通知都没收到", n_notify == "0", f"命中 {n_notify}")
+    if tool_id:
+        req(f"/api/admin/tools/{tool_id}", owner_tok, "DELETE")
+    shutil.rmtree(updir, ignore_errors=True)
+
+    req(f"/api/tickets/{tid2}/transition", owner_tok, "POST", {"event": "start"})
+    st, r = req(f"/api/tickets/{tid2}/transition", owner_tok, "POST", {"event": "release"})
+    show("有客户但没有交付物 → 也被拦", st == 400, r.get("message", "")[:40])
+    show("  理由确实是「没有交付物」",
+         "没有这张订单的交付物" in r.get("message", ""), r.get("message", "")[:44])
 
     print("=== 8. BLOCKED：必须写清卡在哪，恢复后要清干净 ===")
     st, r = req(f"/api/tickets/{tid}/transition", owner_tok, "POST", {"event": "block"})
@@ -248,6 +326,8 @@ def main():
     show("库里没留下测试订单", left == "0", f"残留 {left}")
     subprocess.run(["sudo", "-n", "sqlite3", DB,
                     "DELETE FROM Clients WHERE Contact LIKE 'wechat e2e_test%'"], timeout=30)
+    subprocess.run(["sudo", "-n", "sqlite3", DB,
+                    "DELETE FROM Clients WHERE Name LIKE 'e2e%'"], timeout=30)
     left_c = sql("SELECT COUNT(*) FROM Clients WHERE Contact LIKE 'wechat e2e_test%'")
     show("库里没留下测试客户档案", left_c == "0", f"残留 {left_c}")
     shutil.rmtree(_TMPDIR, ignore_errors=True)
