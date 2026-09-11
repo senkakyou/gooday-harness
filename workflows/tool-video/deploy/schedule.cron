@@ -4,9 +4,23 @@
 # 绝不复制第二份】：OAuth 的 refreshToken 会轮换，两份副本各自刷新会互相顶掉
 # （旧系统栽过两次，其中一次 6 个 bot 连续多天"活着但答不出话"）。
 #
-# 每周一 03:20 出一条：挑「已发布 + 还没有讲解 + 有人用过」里下载量最高的那个。
-# 一次只做一个是刻意的——出错影响面只有一个工具，且人有时间看完再决定要不要继续。
-20 3 * * 1 bash -c 'set -a; source /opt/gooday-harness/.env 2>/dev/null; set +a; HOME=/home/agent python3 /opt/gooday-harness/workflows/{{NAME}}/run.py' >> /var/log/gooday-harness/{{NAME}}.log 2>&1
+# 【每天 03:20 出三条】（大海 2026-09-11：「把现在显示的工具都加上视频解说，
+# 一天做3个就行，做完为止」）。原来是每周一出一条。
+#
+# 当时的口径写的是「一次只做一个是刻意的——出错影响面只有一个工具」。
+# 现在改成 3 个，那条理由怎么办：**没有丢掉，是靠 run.py 自己兜的**——
+#   · 每个工具独立 try，一个失败不影响后两个；
+#   · 同一个工具连挂 MAX_ATTEMPTS 次就跳过，不会天天撞同一堵墙；
+#   · 遇到基础设施故障（凭据/额度/音色下线）立刻停这一轮并告警，
+#     不会用同样的姿势再失败两次、把日志刷成一片。
+#
+# 【一条 cron 顺序做 3 个，不是开 3 条 cron】：本机 2G，三个渲染并发会 OOM。
+# 一条渲染约 8 分钟，三条约 25 分钟，03:20 起跑 03:45 前结束，
+# 不碰 07:30 的 evolve 和 09:00 的日报。
+#
+# 做完之后它每天空跑一次并且**只在第一次做完时通知大海**，
+# 由他决定要不要把这行注释掉（run.py 里 all_done_notified 那段）。
+20 3 * * * bash -c 'set -a; source /opt/gooday-harness/.env 2>/dev/null; set +a; HOME=/home/agent python3 /opt/gooday-harness/workflows/{{NAME}}/run.py --limit 3' >> /var/log/gooday-harness/{{NAME}}.log 2>&1
 
 # 每周日 04:00 自检：不调模型渲一条样片。
 # 【为什么单独有这一条】：主任务每周只跑一次，渲染链路（chromium / edge-tts / ffmpeg）

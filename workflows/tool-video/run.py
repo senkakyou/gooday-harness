@@ -106,12 +106,22 @@ def pick(tools, limit, slug=None):
     # 【客户交付物排在最前，且不看浏览量】。它们刚上架，浏览量必然是 0，
     # 按热度排的话永远轮不到——而它们等着这条片子才能交付、才能结单，
     # 站方工具晚一周出片没人受影响，客户的单子卡住是要退钱的。
-    delivery = [t for t in no_video if t.get("sourceTicketId")]
-    station = [t for t in no_video
-               if not t.get("sourceTicketId")
-               and ((t.get("downloadCount") or 0) + (t.get("viewCount") or 0)) > 0]
-    station.sort(key=lambda t: (-(t.get("downloadCount") or 0), -(t.get("viewCount") or 0)))
-    delivery.sort(key=lambda t: t.get("id") or 0)      # 先来先做
+    delivery = sorted([t for t in no_video if t.get("sourceTicketId")],
+                      key=lambda t: t.get("id") or 0)          # 先来先做
+    station = [t for t in no_video if not t.get("sourceTicketId")]
+
+    # 【零使用的也要排进去，只是排在最后】（2026-09-11 改）。
+    #
+    #   原来这里写 `and (下载+浏览) > 0`，把从没人用过的工具整个排除掉——
+    #   那意味着**「全部工具都配上讲解」这个目标永远到不了**：
+    #   新上架的工具浏览量是 0，于是永远轮不到它，而它没有讲解就更没人点。
+    #   大海要的是「现在显示的工具都加上，做完为止」，
+    #   **「做完」必须是可达的**，不能依赖数据碰巧每个都被人看过。
+    #
+    #   热度仍然决定顺序（有人用的先做），只是不再决定「做不做」。
+    station.sort(key=lambda t: (-(t.get("downloadCount") or 0),
+                               -(t.get("viewCount") or 0),
+                               t.get("id") or 0))
     return (delivery + station)[:limit]
 
 
@@ -180,7 +190,23 @@ def main():
     targets = pick(tools, args.limit, args.slug)
     if not targets:
         log("没有待处理的工具（都已经有讲解了）——这是正常状态，不是失败")
+        # 【做完了要说一声，但只说一次】。大海的要求是「做完为止」，
+        # 那他就得知道什么时候做完了——否则这条 cron 会一直安静地空跑下去，
+        # 没人知道它已经没事可做，也没人去停它。
+        # 用 progress 里的一个标记保证只通知一次；将来新上架工具时
+        # targets 会非空，那时把标记清掉，下次做完会再通知。
+        if not progress.get("all_done_notified"):
+            left = [t for t in tools
+                    if t.get("isPublished") and not (t.get("videoUrl") or "").strip()]
+            notify(f"【讲解片】全部做完了 —— 当前已发布的工具都配上视频讲解了"
+                   f"（待做 {len(left)} 个）。\n"
+                   f"这条产线现在每天空跑一次。不打算再加工具的话，"
+                   f"可以把 workflows/tool-video/deploy/schedule.cron 里那行注释掉。")
+            progress["all_done_notified"] = True
+            save_progress(progress)
         return 0
+    if progress.pop("all_done_notified", None):
+        save_progress(progress)      # 又有新活了，下次做完还要再报一次
 
     done_n = 0
     for tool in targets:
