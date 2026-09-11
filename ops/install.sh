@@ -234,6 +234,25 @@ for who in "${!CRON_BY_USER[@]}"; do
     echo "    [$who] 托管块已更新，块外任务原样保留"
 done
 
+# ── 3.3 播种出来的 config.json 要归仓库属主 ───────────────────────────
+#
+# 【本脚本以 root 跑，所以 `cp config.example.json config.json` 出来的是 root 属主】。
+# 后果：**这台机器上没人能改 bot 配置了** —— 改 allowed_tools / extra_dirs
+# 本该是「一次可 review 的配置变更」，实际变成了要 root 密码的运维操作。
+# 2026-09-11 给灵犀加目录权限时撞上（和 3.4 那个 state 目录是同一个 bug 形状：
+# root 播种出来的东西，交给非 root 身份去管）。
+#
+# config.json 里没有密钥（G18：密钥走 .env），内容是库路径、api_base、
+# 模型名、工具白名单 —— 能改仓库代码的身份本来就能改这些，
+# 让它可写不降低任何实际权限。
+if [[ "$REPO_OWNER" != root ]]; then
+    for cfg in "$REPO"/services/*/config.json "$REPO"/workflows/*/config.json; do
+        [[ -f "$cfg" ]] || continue
+        chown "$REPO_OWNER" "$cfg"
+    done
+    echo "    config.json 属主 → $REPO_OWNER"
+fi
+
 # ── 3.4 属主再对一次 ──────────────────────────────────────────────────
 # 【第 67 行那次 chown 在建目录【之前】】，而第 2/3 段又以 root 新建了
 # state/<名> 与 media/<名>。于是**每一个新成员的状态目录都是 root 属主**。
