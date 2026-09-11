@@ -1,10 +1,16 @@
 // =====================================================
 // Controllers/SettingsController.cs —— 系统配置接口（admin）
 // 路由前缀：/api/admin/settings
-// 职责：读写运行期开关/阈值。首个用途「小额自动放行」（docs/v3/12）。
-//   GET  /api/admin/settings           → 全部配置（含 AutoApprove 默认值）
+// 职责：读写运行期开关/阈值。
+// ⚠️ 原注释写「首个用途小额自动放行（docs/v3/12）」—— AutoApprove 已于 2026-09-11
+//    删除，docs/v3/ 也是旧系统的文档目录、本仓库里不存在。
+//    【这个控制器差点被当成 AutoApprove 专用而一起删掉】：它实际还承载着
+//    Ruyi.DirectChat、ChatBox.Enabled、首页模块开关、模型选择四样，
+//    删了会连带打断三个不相干的功能。
+//   GET  /api/admin/settings           → 全部配置
 //   PUT  /api/admin/settings/{key}     → 设置单个键（body: { value })
-// 招财 bot 也读这些配置决定是否自动放行；写入仅限 admin。
+// 读写都仅限 admin。（原注释写「招财 bot 也读这些配置决定是否自动放行」——
+// 招财已于 2026-09-11 退役，那条自动放行的链路整个不存在了。）
 // =====================================================
 
 using Microsoft.AspNetCore.Authorization;
@@ -19,24 +25,23 @@ namespace GoodayTools.Controllers;
 [Authorize(Roles = "admin")]
 public class SettingsController(AppDbContext db) : ControllerBase
 {
-    // 小额自动放行默认值（首周 Enabled=false 影子观察，确认无误再开）
-    private static readonly Dictionary<string, string> Defaults = new()
-    {
-        ["AutoApprove.Enabled"]         = "false",
-        ["AutoApprove.Limit"]           = "1000",
-        ["AutoApprove.DailyCap"]        = "3000",
-        ["AutoApprove.PerCustomerDaily"] = "1",
-    };
+    // ═══ AutoApprove 的默认值字典已删（2026-09-11）═══════════════════
+    //
+    //   2026-09-10 删「小额自动放行」时，我删了库里那 4 行、删了前端的审批页，
+    //   **却漏了这里**——而 GetAll 每次都把 Defaults 合并进返回值，
+    //   于是那 4 个键被【凭空重新造出来】，接口照旧对外宣称这个开关存在。
+    //
+    //   「删了数据 ≠ 删了那个概念」：只要还有一处在生成默认值，
+    //   它就还活着，而且活在一个没人知道的地方。
+    //   （2026-09-11 清理旧信息时 grep 到的，不是测试抓到的——
+    //    没有任何判据在查「接口返回的键是不是都还有意义」。）
 
     [HttpGet]
     public async Task<IActionResult> GetAll()
     {
+        // 【没有默认值可合】：本表里的键全部靠显式写入，没写过就是没有。
         var rows = await db.SystemSettings.ToListAsync();
-        var map = rows.ToDictionary(r => r.Key, r => r.Value);
-        // 合并默认值（未显式设置的键返回默认）
-        var merged = new Dictionary<string, string>(Defaults);
-        foreach (var kv in map) merged[kv.Key] = kv.Value;
-        return Ok(merged);
+        return Ok(rows.ToDictionary(r => r.Key, r => r.Value));
     }
 
     public record PutReq(string Value);

@@ -10,7 +10,7 @@ Gooday 的 Web 后端。工具、论坛、食品安全、工单、财务的全�
 |---|---|---|
 | 容器 | `gooday_app` | `gooday-harness-api` |
 | 端口 | 8080 | **8081** |
-| 源码 | `/opt/goodayback/src/GoodayTools`（已封存） | `services/api/src`（本仓库） |
+| 源码 | `/opt/goodayback/src/GoodayTools`（**已删除，不是封存**） | `services/api/src`（本仓库） |
 | 产物 | `wwwroot/uploads` 混在源码里 | `/srv/gooday-harness/media/`（G01：产物出仓库） |
 | 数据库 | 卷 `gooday_gooday_data` | **同一个卷**（`external: true`） |
 

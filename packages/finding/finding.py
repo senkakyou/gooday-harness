@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""发现的分类与聚合 —— patrol 与 coo-patrol 共用。
+"""发现的分类与聚合。
+
+【使用方：目前只有 workflows/patrol】——coo-patrol 已于 2026-09-11 删除
+（docs/decisions/006），它曾是第二个使用方。见 README 里记的那笔欠账。
 
 ═══ 为什么要有这层 ═══════════════════════════════════════════════
 

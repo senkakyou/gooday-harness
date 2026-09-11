@@ -6,12 +6,16 @@
 ——因为规范的每一条都配了能自动跑的检查器，而不是写在文档里等人自觉。
 
 > **状态：已接管生产（2026-09-07 切换）。**
-> 9 个 services（5 个 bot ＋ dispatcher ＋ ocr ＋ api ＋ web）、14 条 workflows、
-> 4 个 packages、2 条进化闭环在跑。旧 Gooday 已封存为 `/opt/goodayback`，不再接流量。
+> 5 个 services（常驻 3：如意 `bot-ruyi`、灵犀 `bot-lingxi`、`ocr`；容器 2：`api` `web`）、
+> 12 条 workflows、4 个 packages、2 条进化闭环在跑。
+> **旧 Gooday 已经不存在了**（`/opt/gooday` → `/opt/goodayback` → 已删除）。
 >
-> 尚未闭合的：`evolution/evaluators/` 与 `evolution/experiments/` 只有模板、
-> **零个真实成员**——第二层循环的 Evaluate/Experiment 两环目前是空跑。
-> 缺口清单见 `docs/specs/002-known-gaps.md`。
+> 2026-09-11 做过一次大幅瘦身（`docs/decisions/006`）：删掉 3 个 AI 角色与调度器，
+> 订单从「工单→项目→子任务→事件」四层对象收敛成一张表，状态 12 个 → 6 个，
+> **订单线上的定时任务 4 条 → 0 条**。
+>
+> 尚未闭合的：`evolution/evaluators/` **零个真实成员**（Evaluate 环仍是空跑）；
+> `evolution/experiments/` 有 2 个真实成员。缺口清单见 `docs/specs/002-known-gaps.md`。
 
 ---
 

@@ -1,6 +1,8 @@
 # evolution/ · 第二层循环：系统改进自己
 
 > **注：文中拿「dispatcher 的影子模式」举例说明 Experiment 环。**
+> `dispatcher` 本身已于 2026-09-11 删除（docs/decisions/006），
+> 这个例子只当「影子模式长什么样」看，别去找那个服务。
 > 影子模式本身仍是有效的实验手段（零风险验证新决策逻辑），
 > 但 dispatcher 与 patrol 都已切到生产模式，别照字面以为它们还在影子里跑。
 
@@ -89,10 +91,10 @@ OpenAI/Google/Microsoft 各自带 SDK），而 MCP 已经标准化工具层、A2
 
 | 循环环节 | 谁在做 | 自动？ |
 |---|---|---|
-| Evaluate | `loops/*/` 自带判据；`patrol` 11 项巡检、`coo-patrol` 业务巡检 | ✅ |
+| Evaluate | `loops/*/` 自带判据；`patrol` 的巡检项（coo-patrol 已删，见 decisions/006） | ✅ |
 | Learn | `docs/incidents/` 事故复盘 | ❌ 人写 |
 | Improve | `docs/decisions/` | ⚠️ 闭环内自动，闭环外人写 |
-| Experiment | `loops/` 内置前后对比；`dispatcher` 影子模式已切生产模式，不再跑影子 | ⚠️ |
+| Experiment | `loops/` 内置前后对比；`experiments/` 有 2 个真实成员（order-mainline、tool-private-visibility）| ✅ |
 | Gate | `gates/check.py`（CI ＋ pre-commit ＋ 服务器巡检，G17） | ✅ |
 | Rollback | 数据库快照（`workflows/db-snapshot`）＋ Checkpoint ＋ systemd 可重启 | ✅ |
 

@@ -10,8 +10,26 @@
 系统分两个循环：**执行**（把事做完）和**进化**（把事做得更好）。
 目录就是按这两个循环组织的。
 
-**2026-09-07 起它就是生产系统**——9 个 services、14 条 workflows 在真跑，
-旧系统封存为 `/opt/goodayback`。改这里的东西会影响真实用户。
+**2026-09-07 起它就是生产系统**。改这里的东西会影响真实用户。
+
+现状（2026-09-11 实测，别照旧数字推断）：**5 个 services**
+（常驻 3：`bot-ruyi` `bot-lingxi` `ocr`；容器 2：`api` `web`）、
+**12 条 workflows**（11 条 cron ＋ `order` 刻意无 cron）、4 个 packages、2 条进化闭环。
+
+**旧 Gooday 已经不存在了**——`/opt/gooday` → `/opt/goodayback` → 已删除，
+`/opt` 下现在只有 `gooday-harness`。本仓库的 git 历史**不含旧系统**（从骨架起算）。
+
+它的唯一兜底是另一个仓库的封存点，2026-09-11 用 `git ls-remote` 实测仍在：
+
+```
+git@github.com:senkakyou-design/gooday-tools.git   main 与 cast-c01 均停在 bcc8d6e
+```
+
+**那个仓库不能删。** 取文件：`git remote add archive <上面的 url> && git fetch archive
+&& git checkout bcc8d6e -- <路径>`
+
+业务主线（2026-09-11 起）：**客户 → 如意 → 大海 → 主 Agent ⇄ 灵犀 → 大海 → 客户**。
+订单一张表、6 个状态、**订单线上零定时任务**。设计见 `docs/decisions/006-order-mainline-v2.md`。
 
 ## 目录结构
 
@@ -65,7 +83,7 @@ cp -r evolution/experiments/_template evolution/experiments/<名>  # 加实验
 sudo bash ops/install.sh            # 装上——不需要改这个脚本
 ```
 
-## 七条铁律
+## 八条铁律
 
 违反任一，`evolution/gates/check.py` 会红。**先读 `policies/00-index.md`。**
 
@@ -77,6 +95,9 @@ sudo bash ops/install.sh            # 装上——不需要改这个脚本
 6. **扩展点契约** —— 新增成员 = 复制模板，不碰现有文件。
 7. **改动可追溯** —— 任何自动改动留下 Task / Event / Evidence / Evaluation /
    Decision / Checkpoint。**没有证据不许改。**
+8. **声明了的控制必须有活的代码路径**（G22）—— 配置声明的键要真有人读，
+   定义的函数要真有人调。**死方法就是死控制**；谎称有一道闸比没有这道闸更危险。
+   换来这条的四次事故见 `policies/00-index.md` G22。
 
 ## 动手前后
 

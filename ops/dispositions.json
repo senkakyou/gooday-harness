@@ -57,14 +57,6 @@
       "disposition": "notify-only",
       "why": "重启会掩盖「为什么没重启」这个问题"
     },
-    "finding:tickets": {
-      "disposition": "notify-only",
-      "why": "工单流异常一律人判断"
-    },
-    "finding:stuck_tickets": {
-      "disposition": "notify-only",
-      "why": "工单卡住要人判断，重启是钝器（见 coo-patrol 教训）"
-    },
     "finding:consistency": {
       "disposition": "notify-only",
       "why": "数据不一致的修法因情况而异，不能自动"
@@ -85,13 +77,10 @@
       "disposition": "notify-only",
       "why": "并发槽异常多半是上游问题"
     },
-    "finding:dispatcher": {
-      "disposition": "notify-only",
-      "why": "调度器重启由 patrol 的 services 项负责"
-    },
     "finding:daily_report": {
       "disposition": "notify-only",
       "why": "日报没发要人确认是不是该补发"
     }
-  }
+  },
+  "_retired_2026_09_11": "删掉了 finding:tickets / finding:stuck_tickets / finding:dispatcher 三条：它们对应的检查项随 coo-patrol 与 dispatcher 一起删除了（docs/decisions/006）。【留着没有检查项的处置规则就是死配置】——而 patrol 有一项专门报「不在本表里的 kind」，反过来它不会报「本表里多出来的 kind」，所以这类死条目只能靠复核发现。"
 }

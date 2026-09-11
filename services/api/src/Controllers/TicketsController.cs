@@ -146,8 +146,14 @@ public class TicketsController(AppDbContext db, DeliveryService delivery,
 
     // ---- POST /api/tickets/intake —— 公开建单（替代原 POST /api/requests）----
     //
-    // 【它是唯一能接住未注册访客的入口】：如意只能收站内私信，
-    // 没账号的人找不到她。删了这条路等于断掉拉新。
+    // 【它是唯一能接住未注册访客的路由】：如意只能收站内私信，没账号的人找不到她。
+    //
+    // ⚠️ 但 2026-09-11 复核发现：**这条路实际是关着的**。
+    //    SystemSettings 里 `Module.requests.Enabled = false`，首页 ModuleNav 因此
+    //    不显示它；全前端再没有别的链接指向 /requests（grep 过）。
+    //    也就是说现在只有手敲 URL 才进得来 —— **名义上是拉新入口，实际没有匿名入口**。
+    //    路由和限流都留着（随时能开），但别把它当成"拉新这条路是通的"的证据。
+    //    要开：把那个键改成 true（那是产品决定，归大海）。
     [AllowAnonymous]
     [EnableRateLimiting("anon-write")]   // 匿名写库端点必限流，防脚本灌盘
     [HttpPost("intake")]

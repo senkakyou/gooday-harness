@@ -5,6 +5,9 @@
 > 那条路**已经不存在了**：旧栈随 `/opt/gooday` 改名 `/opt/goodayback` 一起退役，
 > 容器 `gooday_app`/`gooday_nginx` 都已停止。
 >
+> **2026-09-11 复核：`/opt/goodayback` 连封存副本也已删除。**
+> `/opt` 下现在只有 `gooday-harness`。下面「兜底」一节已按这个事实改写。
+>
 > **照着一份过期的 runbook 操作，比没有 runbook 更危险**——
 > 出事时人不会先怀疑手册，只会以为自己敲错了。
 
@@ -85,10 +88,41 @@ sqlite3 <快照> "SELECT COUNT(*) FROM Tools;"
 换生产库要停 api、换文件、起 api，**并且换之前先把当前库另存一份**——
 换错方向就没得救了。
 
+## 最近一次大改的回滚点（2026-09-11）
+
+订单主链路 v2（`docs/decisions/006`）动了库结构并清空了业务数据。它的回滚点：
+
+- **代码**：tag `pre-order-mainline-v2`（= `293f3de`，已推 origin）
+- **数据**：`/srv/gooday-harness/backups/gooday/pre-order-mainline-v2.db`
+- **逐表归档**：`/srv/gooday-harness/backups/pre-order-mainline-v2-archive/*.json`
+
+回滚命令与**实测演练结果**（含「少删 `-wal`/`-shm` 就回滚不掉」这个坑）
+写在 `evolution/experiments/order-mainline/README.md`，别在这里另抄一份。
+
 ## 兜底：整套重建
 
-`/opt/goodayback`（1.5G）是旧系统的封存，**它不是可运行的回滚目标**，
-只是万一漏了什么还能捞文件出来。真正的重建路径是：
+**旧系统已经彻底不在了**（2026-09-11 实测 `/opt` 下只有 `gooday-harness`）：
+`/opt/gooday` → `/opt/goodayback` → 已删除。
+也就是说**没有「从旧系统捞文件」这条路了**。
+
+唯一兜底是另一个仓库的封存点。**2026-09-11 用 `git ls-remote` 实测确认仍在**：
+
+```bash
+git ls-remote git@github.com:senkakyou-design/gooday-tools.git
+#   main 与 cast-c01 均停在 bcc8d6e（3706 个文件）
+```
+
+要捞旧系统的文件：
+
+```bash
+git remote add archive git@github.com:senkakyou-design/gooday-tools.git
+git fetch archive && git checkout bcc8d6e -- <路径>
+```
+
+**那个仓库不能删——它是旧 Gooday 现在唯一的完整存在形式。**
+本仓库的 git 历史从 harness 骨架起算，不含旧系统。
+
+真正的重建路径是：
 
 ```bash
 git clone git@github.com:senkakyou/gooday-harness.git /opt/gooday-harness

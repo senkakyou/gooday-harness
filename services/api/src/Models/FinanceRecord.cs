@@ -53,7 +53,10 @@ public class FinanceRecord
     // 实际收款时间
     public DateTime? ReceivedAt { get; set; }
 
-    // ---- V3 收款升级（见 docs/v3/07-database-changes.md）----
+    // ---- 收款相关字段 ----
+    // ⚠️ 原注释指向 docs/v3/07-database-changes.md —— 那是【旧系统】的文档目录，
+    //    本仓库里不存在。2026-09-11 起财务全部人工录入（招财已退役），
+    //    而且 Tickets.Amount 与本表【没有任何交叉核对】，见 Models/Ticket.cs 的说明。
     public string? EvidenceUrl { get; set; }   // 付款凭证截图归档路径（如意经手归档）
     public int? ConfirmedBy { get; set; }       // 确认人 UserId（审计：谁拍的板）
 }
