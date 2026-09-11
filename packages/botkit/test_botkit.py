@@ -31,9 +31,27 @@ check("槽位库不可用时降级放行", h is not None, "辅助设施不该阻
 model.SLOTS_DB = bad
 
 print("\n=== 3. 基础设施错误识别 ===")
-check("认得 OAuth 失效", model.is_infra_error("Failed to authenticate: OAuth session expired", 1))
-check("认得未登录", model.is_infra_error("not logged in", 1))
-check("正常业务输出不误判", not model.is_infra_error("这是模型的正常回答", 0))
+# ⚠️ 【必须按生产的调用方式测：只传 text，不传 rc】（2026-09-11 事故）。
+#
+#   原来这三条写的是 is_infra_error("not logged in", 1) —— 传了 rc。
+#   而两个真实调用方（runner.py:342、tool-video/writer.py:287）都只传 text。
+#   旧实现是 `(rc not in (0,None) or not text) and any(关键词)`，
+#   单参数调用时前置条件恒假 —— **连 "Invalid API key" 都返回 False**，
+#   也就是「基础设施问题单独报 P0」这套机制从来没生效过一次。
+#   **而测试一直是绿的，因为它测的是生产里没人用的调用方式。**
+#
+#   代价：2026-09-11 出片产线 25 秒内连挂 9 个工具，早停一次没触发。
+check("认得 OAuth 失效（单参数，和生产一致）",
+      model.is_infra_error("Failed to authenticate: OAuth session expired"))
+check("认得未登录（单参数）", model.is_infra_error("not logged in"))
+check("认得额度用尽（单参数）", model.is_infra_error("Rate limit exceeded"))
+check("认得 API key 无效（单参数）", model.is_infra_error("Invalid API key"))
+# 【最重要的一条】：拿不到任何诊断信息时，默认按基础设施处理而不是内容问题。
+# 信息最少的失败最不该被当成「这次写得不好」然后继续撞下去。
+check("「退出码 N」这种没信息的失败算基础设施", model.is_infra_error("退出码 1"))
+check("空错误也算基础设施", model.is_infra_error(""))
+check("正常业务输出不误判", not model.is_infra_error("这是模型的正常回答"))
+check("内容验收失败不误判成基础设施", not model.is_infra_error("写了 3 次仍没过验收"))
 
 print("\n=== 4. 出口白名单（默认拒绝）===")
 outbound.configure({20: {1}, 23: "*"})

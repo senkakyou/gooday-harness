@@ -24,6 +24,7 @@
    凭据失效会表现成「AI 今天有点笨」，没人会去查凭据。
 """
 import os
+import re
 import signal
 import sqlite3
 import subprocess
@@ -39,6 +40,9 @@ SLOT_RETRY_SEC = 5
 SLOT_WAIT_MAX = 15 * 60       # 排队最长 15 分钟，超过放弃本次调用
 
 # 基础设施类错误：绝不能把原文当回复发给用户
+# 「退出码 N」这种一句话错误＝我们对失败一无所知（stderr 和 stdout 都空）
+_BARE_FAIL = re.compile(r"^退出码\s*\d+")
+
 _INFRA_PAT = ("failed to authenticate", "oauth session expired", "not logged in",
               "invalid api key", "unauthorized", "please run /login",
               "credit balance", "rate limit")
@@ -151,9 +155,36 @@ def is_infra_error(text, rc=None):
 
     分不清的后果：凭据失效会表现成「AI 今天有点笨」，
     没有人会想到去查凭据——旧系统真的因此瞎了三周。
+
+    ═══ 这个函数在 2026-09-11 之前【对所有真实调用方永远返回 False】═══════
+
+      原来是：`(rc not in (0, None) or not text) and any(关键词)`。
+      而两个真实调用方（runner.py、tool-video/writer.py）都只传 text、不传 rc，
+      于是 `rc not in (0, None)` 恒为 False、非空 text 让 `not text` 也是 False，
+      整个前置条件恒假 —— **连 "Invalid API key" 都判成 False**。
+
+      **而测试是绿的**，因为它写的是 `is_infra_error("not logged in", 1)`
+      ——传了 rc。**测试用的是生产里没人用的调用方式**，所以它测不到这个 bug。
+
+      后果就是这个 docstring 自己警告的那件事：凭据失效表现成「AI 今天有点笨」。
+      2026-09-11 出片产线 25 秒内连挂 9 个工具、早停一次没触发，就是它。
+
+    现在的判据，从宽到严：
+      1. 命中关键词 → 是。【只看关键词就够，不需要 rc 佐证】——
+         本函数只在调用已经失败时被问到，text 是错误信息不是模型输出，
+         不存在「模型正好写到 rate limit 这个词」的误判。
+      2. 有非零退出码 → 是。
+      3. **拿不到任何诊断信息（空、或只有一句「退出码 N」）→ 是。**
+         这一条是反直觉但最重要的：信息最少的失败，最不该被当成
+         「这次写得不好」而继续撞下去。没有依据说它是内容问题时，
+         默认停下来找人，比默认接着跑便宜得多。
     """
-    low = (text or "").lower()
-    return (rc not in (0, None) or not text) and any(k in low for k in _INFRA_PAT)
+    low = (text or "").strip().lower()
+    if any(k in low for k in _INFRA_PAT):
+        return True
+    if rc not in (0, None):
+        return True
+    return not low or bool(_BARE_FAIL.match(low))
 
 
 # ────────────────────────── 主入口 ──────────────────────────
@@ -197,7 +228,12 @@ def call(prompt, system, *, tag="bot", model=None, timeout=300,
             return "", False, f"模型调用超时 {timeout}s，已整组终止"
 
         if proc.returncode != 0 or not out.strip():
-            return "", False, (err or "").strip()[:500] or f"退出码 {proc.returncode}"
+            # 【stderr 空就把 stdout 带上】：claude 有时把错误写在 stdout，
+            # 只读 stderr 会得到一句「退出码 1」——那是最难查的失败形状。
+            detail = ((err or "").strip() or (out or "").strip())[:500]
+            return "", False, detail or (
+                f"退出码 {proc.returncode}（stderr 与 stdout 都是空的，"
+                f"拿不到任何诊断信息）")
         return out, True, ""
     finally:
         _release(holder)
