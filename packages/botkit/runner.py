@@ -255,9 +255,43 @@ class Bot:
                              token_provider=self._token, tag=self.name)[0]
 
     # ── 主循环 ────────────────────────────────────────────
+    def _report_stale_claims(self):
+        """启动时把「认领了但没做完」的批次喊出来，然后明确放弃。
+
+        ═══ 这个信号曾经有消费者，被我删掉了（2026-09-11 由 G22 门禁抓到）═══
+
+          inbox.stale_claims 的 docstring 写着「重启后要么续做要么明确放弃，
+          **不能装作没有**」，而它【没有任何调用方】——也就是说它描述的那件事
+          从来没人做。原来 coo-patrol 有一个「pending 看门狗」在看，
+          2026-09-10 我把 coo-patrol 整个删了，顺手删掉了它唯一的消费者，
+          而这个函数留在那里看起来像还在生效。
+
+          现在在这里接上，并且【明确选「放弃」而不是「续做」】：
+          被 kill 的那一批消息没有走到 mark_read，所以下一轮本来就会重新处理；
+          真正缺的不是续做，是**让这件事可见**——否则进程被 OOM 杀过几次，
+          pending 文件里堆满僵尸，而日志里一个字都没有。
+        """
+        try:
+            stale = inbox.stale_claims(self.name)
+        except Exception as e:
+            self.log(f"⚠️ 查僵尸认领失败（不阻断启动）：{type(e).__name__}: {e}")
+            return
+        if not stale:
+            return
+        self.log(f"⚠️ 上次退出时有 {len(stale)} 批消息认领了没做完"
+                 f"（很可能是被 kill/OOM）。这些消息没标已读，本轮会重新处理；"
+                 f"认领记录就地清掉，不装作没发生过。")
+        for key, meta, age in stale:
+            self.log(f"   僵尸认领 {key} 已挂 {age/60:.0f} 分钟 meta={meta}")
+            try:
+                inbox.resolve(self.name, key)
+            except Exception as e:
+                self.log(f"   ⚠️ 清不掉 {key}：{e}")
+
     def run(self):
         self.log(f"启动，bot_id={self.cfg['bot_id']}，"
                  f"模式={'只读' if self.readonly else '生产'}")
+        self._report_stale_claims()
         sysp = self.system_prompt()
 
         while True:
