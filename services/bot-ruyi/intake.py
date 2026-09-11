@@ -78,6 +78,18 @@ def parse_block(text):
     return out or None
 
 
+def strip_block(text):
+    """把 ```order 块从要发给客户的文本里剥掉。
+
+    【客户不该看见内部格式】。prompt 里跟如意说「客户看不懂没关系」，
+    那是退而求其次——真正对的做法是根本别让他看见：
+    一段结构化块出现在聊天里，客户要么以为出错了，要么照着改内容。
+    """
+    out = BLOCK_RE.sub("", text or "").strip()
+    # 块前后常留下空行，收一下
+    return re.sub(r"\n{3,}", "\n\n", out)
+
+
 def validate(d):
     """硬门槛。任何一条不过就不开单。"""
     for k in FIELDS:

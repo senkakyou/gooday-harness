@@ -9,7 +9,9 @@
 各 bot 的差异只剩三处，用回调注入：
   · `context(cfg)`      要先查好什么事实注入 prompt
   · `serves`            服务谁（其他人的消息根本不处理）
-  · `on_reply(...)`     拿到模型输出之后干什么（多数就是回复）
+  · `on_reply(...)`     **副作用钩子**：回复发出【之后】再跑，用来做落库之类的事。
+                        它【不负责回复】，也不能阻止回复——2026-09-11 因为把它
+                        写成「要么钩子要么回复」的三选一，如意整整静默了一天。
 
 共同部分（每个 bot 都必须有、且都容易写错的）：
   心跳 · 只读模式 · 按发送者合并 · 失败必回执 · 基础设施错误单独报 P0 · 留痕
@@ -344,14 +346,34 @@ class Bot:
                         raise RuntimeError(mdl.INFRA_REPLY)
                     raise RuntimeError(f"模型调用失败: {err}")
 
-                if self.on_reply:
-                    self.on_reply(self, sender_id, batch, text, task)
-                elif self.readonly:
+                # ═══ 【先回复，再跑钩子】——顺序和结构都是事故换来的 ═══════
+                #
+                #   2026-09-11 事故：原来这里是 `if on_reply: ... else: send(...)`，
+                #   **三选一**。给如意挂上建单钩子之后，`send` 那一支再也走不到，
+                #   而钩子本身只负责解析 ```order 块落库、不发消息。
+                #   于是客户发「你好」→ 模型正常出了回复 → **回复根本没发出去** →
+                #   标已读 → 事件流记 `handled ok:1, failed:0`。
+                #   **全绿，而用户那边石沉大海。** 和「标已读后静默吞掉」同形。
+                #
+                #   现在：回复【总是】发（只读模式除外），钩子只做副作用，
+                #   而且【放在发送之后并包 try】——**一个副作用钩子不该有能力
+                #   让用户收不到回复**，无论它抛异常还是忘了发。
+                if self.readonly:
                     task.event("reply_suppressed", "P3",
                                {"sender": sender_id, "preview": text[:200]})
                     self.log(f"[只读] 对 {sender_id} 本应回复：{text[:80]}")
                 else:
                     self.send(sender_id, text.strip())
+
+                if self.on_reply:
+                    try:
+                        self.on_reply(self, sender_id, batch, text, task)
+                    except Exception as e:
+                        # 钩子炸了不能连累回复（回复已经发出去了），也不能静默
+                        self.log(f"⚠️ on_reply 钩子异常（回复已发出，不受影响）："
+                                 f"{type(e).__name__}: {e}")
+                        task.event("on_reply_failed", "P1",
+                                   {"sender": sender_id, "error": f"{type(e).__name__}: {e}"})
 
             def on_error(sender_id, exc):
                 """失败必给回执——绝不静默吞掉。"""

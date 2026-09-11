@@ -6,6 +6,7 @@ TMP = tempfile.mkdtemp(prefix="botkit-test-")
 os.environ["GOODAY_HARNESS_STATE"] = TMP
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import model, outbound, inbox
+from runner import Bot
 model.STATE = TMP; model.SLOTS_DB = os.path.join(TMP, "state", "model-slots.db")
 inbox.STATE = TMP
 
@@ -81,6 +82,56 @@ for _ in range(3):
     inbox.process("demo4", {10: [{"Id": 31}]},
                   lambda s, m: seen.append(1), lambda s, e: None)
 check("不认领时同一条会被反复处理（事故形态可复现）", len(seen) == 3, seen)
+
+# ═══ on_reply 钩子绝不能把回复吞掉（2026-09-11 事故）═══════════════
+#
+#   runner 原来是 `if on_reply: ... else: send(...)` —— 三选一。
+#   给如意挂上建单钩子之后，send 那一支再也走不到，而钩子只落库不发消息。
+#   **客户发「你好」，模型正常出了回复，回复却没发出去**，
+#   然后标已读、事件流记 ok:1、日志一个字都没有。全绿，用户那边石沉大海。
+#
+#   这条测试直接盯那个契约：**挂了钩子，回复照样要发。**
+class _FakeBot(Bot):
+    def __init__(self):                     # 绕开 config/网络
+        self.name = "fake"
+        self.cfg = {"serves": [7], "bot_id": 99}
+        self.readonly = False
+        self.sent = []
+        self.hook_ran = []
+        self.context = lambda cfg: ""
+        self._ctx_takes_sender = False
+        self.on_reply = lambda bot, sid, batch, text, task: bot.hook_ran.append(text)
+
+    def send(self, to, text):
+        self.sent.append((to, text))
+
+    def history(self, sender_id, exclude_ids=()):
+        return ""
+
+    def log(self, msg):
+        pass
+
+
+_orig_call = model.call
+fb = _FakeBot()
+model.call = lambda *a, **k: ("模型的回复", True, "")
+try:
+    fb._handle_batch([{"Id": 1, "SenderId": 7, "Content": "你好"}], "sysp")
+finally:
+    model.call = _orig_call
+check("【挂了 on_reply 也必须发回复】否则客户那边石沉大海",
+      len(fb.sent) == 1 and fb.sent[0][1] == "模型的回复", fb.sent)
+check("on_reply 钩子仍然跑到了（副作用没丢）", fb.hook_ran == ["模型的回复"], fb.hook_ran)
+
+fb2 = _FakeBot()
+fb2.on_reply = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("钩子炸了"))
+model.call = lambda *a, **k: ("照样要发", True, "")
+try:
+    fb2._handle_batch([{"Id": 2, "SenderId": 7, "Content": "hi"}], "sysp")
+finally:
+    model.call = _orig_call
+check("钩子抛异常也不影响回复（回复先于钩子）",
+      len(fb2.sent) == 1 and fb2.sent[0][1] == "照样要发", fb2.sent)
 
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{'─'*44}\n通过 {ok} · 失败 {fail}")

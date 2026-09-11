@@ -28,6 +28,16 @@ NAME = "bot-ruyi"
 class FrontDeskBot(Bot):
     """对外窗口：服务所有人，但输出受最严限制。"""
 
+    def send(self, to, text):
+        """发给客户前把 ```order 块剥掉。
+
+        【客户不该看见内部格式】。那段块是给 intake.py 解析用的，
+        出现在聊天里客户要么以为出错了，要么照着改内容。
+        剥离放在 send 而不是 on_reply 里：**发送是唯一出口**，
+        放这里就不可能有哪条路径漏掉。
+        """
+        return super().send(to, intake.strip_block(text))
+
     def _handle_batch(self, msgs, sysp):
         # 【收发两侧都要动态放行】——2026-09-07 事故：只放行了收，没放行发。
         #
